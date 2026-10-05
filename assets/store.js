@@ -127,7 +127,9 @@
       this.mode = "supabase";
       this.cfg = cfg;
       this.client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-        auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true }
+        // Session lives only in this browser tab (sessionStorage): closing the tab signs the user out,
+        // so every new visit starts at the Microsoft 365 email sign-in.
+        auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true, storage: window.sessionStorage }
       });
     }
     async init() {}
@@ -150,7 +152,8 @@
       const redirectTo = window.location.origin + window.location.pathname;
       const { error } = await this.client.auth.signInWithOAuth({
         provider: "azure",
-        options: { scopes: "openid email profile offline_access", redirectTo }
+        // prompt=login: Microsoft always asks for the email and password, even if already signed in to M365
+        options: { scopes: "openid email profile offline_access", redirectTo, queryParams: { prompt: "login" } }
       });
       if (error) throw error; // on success the browser leaves for login.microsoftonline.com
     }
