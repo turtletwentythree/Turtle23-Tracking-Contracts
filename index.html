@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121212">
+  <title>Contract Tracking System</title>
+  <link rel="icon" type="image/png" href="assets/logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <section class="login-gateway" id="loginGateway" aria-labelledby="loginTitle">
+    <div class="login-gateway-inner">
+      <div class="login-card">
+        <div class="login-brand-mark" aria-hidden="true">▣</div>
+        <h1 id="loginTitle">Welcome Back</h1>
+        <p class="login-system-name">Contract Tracking System</p>
+        <p class="login-intro">Sign in to access the Contract Tracking System<br>Track, Manage and Monitor Contract Progress</p>
+        <div class="login-error" id="loginError" role="alert"></div>
+        <button class="ms-button" id="msLogin" type="button">
+          <svg width="20" height="20" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
+          <span id="msLoginText">Sign in with Microsoft 365</span>
+        </button>
+        <p class="ms-note">ใช้บัญชีอีเมลบริษัท (Microsoft 365) สิทธิ์การใช้งานกำหนดโดยผู้ดูแลระบบ</p>
+        <div class="login-divider" id="loginDivider"><span>หรือ</span></div>
+        <form class="login-form" id="loginForm" novalidate>
+          <div class="login-field">
+            <label for="loginUsername">Email</label>
+            <div class="login-input-shell">
+              <span class="login-input-icon" aria-hidden="true">●</span>
+              <input id="loginUsername" type="text" placeholder="name@turtle23.com" autocomplete="username" autocapitalize="none" spellcheck="false">
+            </div>
+          </div>
+          <div class="login-field">
+            <label for="loginPassword">Password</label>
+            <div class="login-input-shell">
+              <span class="login-input-icon" aria-hidden="true">■</span>
+              <input id="loginPassword" type="password" placeholder="Enter your password" autocomplete="current-password">
+              <button class="password-toggle" id="passwordToggle" type="button">Show</button>
+            </div>
+          </div>
+          <div class="login-actions">
+            <button class="login-submit" id="loginSubmit" type="submit">Sign In</button>
+            <button class="login-clear" id="loginClear" type="button">Clear</button>
+          </div>
+        </form>
+        <section class="demo-account-section" id="demoAccountSection">
+          <h2>Accounts</h2>
+          <div class="demo-account-grid">
+            <button class="demo-account-button" type="button" data-demo-account="viewer@turtle23.com"><strong>Viewer</strong><span>Contract Viewer</span><em>viewer@turtle23.com</em></button>
+            <button class="demo-account-button" type="button" data-demo-account="user@turtle23.com"><strong>User</strong><span>Contract User</span><em>user@turtle23.com</em></button>
+            <button class="demo-account-button" type="button" data-demo-account="confidential@turtle23.com"><strong>Confidential</strong><span>Confidential User</span><em>confidential@turtle23.com</em></button>
+            <button class="demo-account-button" type="button" data-demo-account="admin@turtle23.com"><strong>Admin</strong><span>System Administrator</span><em>admin@turtle23.com</em></button>
+          </div>
+          <p class="demo-hint">โหมดสาธิต: ยังไม่ได้เชื่อม Microsoft 365 กดบัญชีเพื่อเข้าใช้ทันที หรือพิมพ์อีเมลใดก็ได้ใน Users &amp; Roles (รหัสผ่าน demo1234) ข้อมูลเก็บในเบราว์เซอร์นี้เท่านั้น</p>
+        </section>
+      </div>
+      <footer class="login-footer">Contract Tracking System · Version 2.0.0<br>© 2026 Turtle 23 Company Limited</footer>
+    </div>
+  </section>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><img src="assets/logo.png" alt="Turtle 23 Company Limited"></div>
+      <nav class="nav" id="nav" aria-label="Main navigation"></nav>
+      <div class="sidebar-footer"><span class="sync-dot" id="syncDot"></span><span id="syncText">Demo mode</span></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title">
+          <h1 id="pageHeading">Tracking Contracts Dashboard</h1>
+          <p id="pageSubheading"></p>
+        </div>
+        <div class="top-actions">
+          <button class="icon-button" id="refreshBtn" title="Refresh">↻</button>
+          <div class="profile-menu">
+            <button class="profile-trigger" id="profileTrigger" type="button">
+              <span class="avatar" id="profileAvatar">A</span>
+              <span class="profile-text"><strong id="profileName"></strong><span id="profileRole"></span></span>
+              <span aria-hidden="true">▾</span>
+            </button>
+            <div class="profile-dropdown" id="profileDropdown" hidden>
+              <p id="profileDetail"></p>
+              <button class="btn" id="logoutBtn" type="button" style="width:100%">Sign Out / ออกจากระบบ</button>
+            </div>
+          </div>
+        </div>
+      </header>
+      <div class="content" id="view"></div>
+    </main>
+  </div>
+
+  <div id="drawerRoot"></div>
+
+  <script src="assets/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="assets/seed-data.js"></script>
+  <script src="assets/store.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

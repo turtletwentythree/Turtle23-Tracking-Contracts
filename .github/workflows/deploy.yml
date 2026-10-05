@@ -1,0 +1,49 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Write the Supabase connection from repository secrets, so keys never live in git.
+      # Without the secrets the site still deploys and runs in demo mode.
+      - name: Write runtime config
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          EMAIL_DOMAIN: ${{ vars.EMAIL_DOMAIN || 'turtle23.com' }}
+          ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'false' }}
+        run: |
+          cat > assets/config.js <<EOF
+          window.APP_CONFIG = {
+            SUPABASE_URL: "${SUPABASE_URL}",
+            SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}",
+            EMAIL_DOMAIN: "${EMAIL_DOMAIN}",
+            ALLOW_PASSWORD_LOGIN: ${ALLOW_PASSWORD_LOGIN}
+          };
+          EOF
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
