@@ -31,15 +31,21 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           EMAIL_DOMAIN: ${{ vars.EMAIL_DOMAIN || 'turtle23.com' }}
           ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'false' }}
+        # Values are trimmed (a pasted secret often ends with a newline) and JSON-escaped,
+        # so a stray character can never break config.js and drop the site into demo mode.
         run: |
-          cat > assets/config.js <<EOF
-          window.APP_CONFIG = {
-            SUPABASE_URL: "${SUPABASE_URL}",
-            SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}",
-            EMAIL_DOMAIN: "${EMAIL_DOMAIN}",
-            ALLOW_PASSWORD_LOGIN: ${ALLOW_PASSWORD_LOGIN}
-          };
-          EOF
+          node -e '
+            const t = v => (v || "").trim();
+            const cfg = {
+              SUPABASE_URL: t(process.env.SUPABASE_URL).replace(/\/+$/, ""),
+              SUPABASE_ANON_KEY: t(process.env.SUPABASE_ANON_KEY),
+              EMAIL_DOMAIN: t(process.env.EMAIL_DOMAIN) || "turtle23.com",
+              ALLOW_PASSWORD_LOGIN: t(process.env.ALLOW_PASSWORD_LOGIN) === "true"
+            };
+            console.log("SUPABASE_URL set:", Boolean(cfg.SUPABASE_URL), "| SUPABASE_ANON_KEY set:", Boolean(cfg.SUPABASE_ANON_KEY));
+            if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) console.log("::warning::Supabase secrets are missing, the site will run in demo mode");
+            require("fs").writeFileSync("assets/config.js", "window.APP_CONFIG = " + JSON.stringify(cfg, null, 2) + ";\n");
+          '
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
