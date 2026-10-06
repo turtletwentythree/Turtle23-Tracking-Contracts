@@ -8,6 +8,9 @@
   const text = v => { const s = String(v ?? "").trim(); return s === "" ? null : s; };
   const yes = v => !/^(no|false|0|n|inactive)$/i.test(String(v ?? "").trim());
   const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } };
+  // Old department names in the source files → the name in department_master
+  const DEPT_ALIAS = { "Project Manager": "Project Management" };
+  const dept = v => { const s = text(v); return s && DEPT_ALIAS[s] ? DEPT_ALIAS[s] : s; };
   const pick = (r, keys) => Object.fromEntries(keys.filter(k => r[k] !== undefined && r[k] !== "").map(k => [k, r[k]]));
 
   function table(snap, name) {
@@ -78,7 +81,7 @@
       return {
         id,
         name: text(r["Contract Name"]) || id,
-        department: text(r["Department / Restaurant"]),
+        department: dept(r["Department / Restaurant"]),
         owner: text(r["Contract Owner"]),
         classification: text(r["Category"]) || (r["Access Level"] === "Confidential" ? "Confidential" : "Day-to-day Work"),
         type: text(r["Type of Contract"]),
@@ -107,7 +110,7 @@
       name: text(r["Department / Restaurant"]), code: text(r["Department Code"]) || "", active: yes(r["Active"])
     })).filter(d => d.name);
     const people = table(snap, "people_master").map(r => ({
-      name: text(r["name"]), department: text(r["department"]), email: (text(r["email"]) || "").toLowerCase() || null,
+      name: text(r["name"]), department: dept(r["department"]), email: (text(r["email"]) || "").toLowerCase() || null,
       line_user_id: text(r["lineUserId"]), active: yes(r["active"])
     })).filter(p => p.name);
     const contract_types = table(snap, "type_master").map(r => ({
@@ -121,7 +124,7 @@
     const contract_templates = table(snap, "contract_template_master").map(r => ({
       classification: text(r.classification), type_group: text(r.typeGroup), sub_type: text(r.subType), name: text(r.name),
       selection_label: text(r.selectionLabel), source_row: int(r.sourceRow), type: text(r.type), work_type: text(r.workType),
-      contract_id: text(r.contractId), access_level: text(r.accessLevel), category: text(r.category), department: text(r.department),
+      contract_id: text(r.contractId), access_level: text(r.accessLevel), category: text(r.category), department: dept(r.department),
       vendor: text(r.vendor), group_name: text(r.group), fixed_sla: int(r.fixedSla), sla_version: text(r.slaVersion),
       remark: text(r.remark), active: yes(r.active)
     })).filter(t => t.name);
