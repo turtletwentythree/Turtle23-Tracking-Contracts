@@ -1562,6 +1562,14 @@ window.SEED_DATA = {
    "source": "manual"
   },
   {
+   "email": "root@turtle23.com",
+   "display_name": "Root System Administrator (Demo)",
+   "department": "Demo",
+   "role": "root",
+   "active": true,
+   "source": "manual"
+  },
+  {
    "email": "pavarit.i@turtle23.com",
    "display_name": "Pavarit Im-em (Dome)",
    "department": "Business Development",

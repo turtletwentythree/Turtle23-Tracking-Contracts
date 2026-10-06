@@ -22,7 +22,7 @@
     { id: "contracts", icon: "≡", label: "Contracts", title: "Contract Status", sub: "ติดตาม Contract Owner, cycle, return และสถานะล่าสุด", min: 1 },
     { id: "confidential", icon: "◆", label: "Confidential", title: "Confidential Contracts", sub: "สัญญาลับ เฉพาะผู้มีสิทธิ์ระดับ Confidential ขึ้นไป", min: 3 },
     { id: "user", icon: "✎", label: "User Case Action", title: "User Case Action", sub: "เพิ่มเคส อัปเดตสถานะ และปิดเคสจาก Contract Status / Log View", min: 2 },
-    { id: "master", icon: "▤", label: "Master Data", title: "Master Data", sub: "แก้ไขข้อมูล dropdown และบันทึกกลับฐานข้อมูล", min: 4 },
+    { id: "master", icon: "▤", label: "Master Data", title: "Master Data", sub: "แก้ไขข้อมูล dropdown และบันทึกกลับฐานข้อมูล", min: 5 },
     { id: "admin", icon: "⚙", label: "Admin Tools", title: "Admin Tools", sub: "อนุมัติ Due Date จัดการสิทธิ์ผู้ใช้ และแจ้งเตือนสถานะ", min: 4 }
   ];
 
@@ -755,7 +755,7 @@
 
   function renderMaster() {
     const t = MASTER_TABS.includes(S.masterTab) ? S.masterTab : "contracts";
-    const editable = can(4);
+    const editable = can(5);
     const D = ensureDraft(t);
     return `<section class="panel">
       <div class="panel-head"><div><h2>Master Data</h2><p>Edit dropdown data and save it back to the database${editable ? "" : " · อ่านอย่างเดียว (แก้ไขได้เฉพาะ Admin)"}</p></div>
@@ -885,7 +885,8 @@
     viewer: "เมนู: Dashboard, Contracts (ดูอย่างเดียว)",
     user: "เมนู: Dashboard, Contracts, User Case Action",
     confidential: "เมนู: Dashboard, Contracts, Confidential, User Case Action",
-    admin: "เมนู: Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools"
+    admin: "เมนู: Dashboard, Contracts, Confidential, User Case Action, Admin Tools",
+    root: "เมนู: Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools"
   };
   function renderAudit() {
     const rows = [...(S.db.access_audit || [])].sort((a, b) => String(b.changed_at).localeCompare(String(a.changed_at)) || b.id - a.id);

@@ -12,7 +12,8 @@
     viewer: { level: 1, label: "Viewer", nameEn: "Contract Viewer", nameTh: "ผู้ดูข้อมูลสัญญา" },
     user: { level: 2, label: "User", nameEn: "Contract User", nameTh: "ผู้ดำเนินการสัญญา" },
     confidential: { level: 3, label: "Confidential", nameEn: "Confidential User", nameTh: "ผู้ดำเนินการสัญญาลับ" },
-    admin: { level: 4, label: "Admin", nameEn: "System Administrator", nameTh: "ผู้ดูแลระบบ" }
+    admin: { level: 4, label: "Admin", nameEn: "System Administrator", nameTh: "ผู้ดูแลระบบ" },
+    root: { level: 5, label: "Root", nameEn: "Root System Administrator", nameTh: "ผู้ดูแลระบบสูงสุด" }
   };
 
   function safeStorage() {
@@ -23,7 +24,7 @@
 
   // ───────────── Demo / local store ─────────────
   class LocalStore {
-    constructor() { this.mode = "demo"; this.key = "ct-demo-db-v4"; this.sessionKey = "ct-demo-session-v1"; }
+    constructor() { this.mode = "demo"; this.key = "ct-demo-db-v5"; this.sessionKey = "ct-demo-session-v1"; }
     async init() {
       const raw = storage.getItem(this.key);
       this.db = raw ? JSON.parse(raw) : JSON.parse(JSON.stringify(window.SEED_DATA));
@@ -70,9 +71,19 @@
     guardAccess(before, change) {
       const snapshot = JSON.parse(JSON.stringify(before));
       change();
-      if (snapshot.some(u => u.role === "admin" && u.active !== false) && !this.db.user_access.some(u => u.role === "admin" && u.active !== false)) {
+      const isAdmin = u => (u.role === "admin" || u.role === "root") && u.active !== false;
+      if (snapshot.some(isAdmin) && !this.db.user_access.some(isAdmin)) {
         this.db.user_access = snapshot;
-        throw new Error("ต้องมี Admin ที่ใช้งานอยู่อย่างน้อย 1 บัญชี");
+        throw new Error("ต้องมี Admin (Level 4 หรือ 5) ที่ใช้งานอยู่อย่างน้อย 1 บัญชี");
+      }
+      // Only Level 5 grants or removes Level 5 (until the first Root exists), like guard_root_role() in 006
+      const me = snapshot.find(u => u.email === (JSON.parse(storage.getItem(this.sessionKey) || "{}").email));
+      const rootBefore = snapshot.some(u => u.role === "root" && u.active !== false);
+      const touched = this.db.user_access.filter(n => { const o = snapshot.find(x => x.email === n.email); return (n.role === "root" || o?.role === "root") && JSON.stringify(o) !== JSON.stringify(n); })
+        .concat(snapshot.filter(o => o.role === "root" && !this.db.user_access.some(n => n.email === o.email)));
+      if (touched.length && rootBefore && me?.role !== "root") {
+        this.db.user_access = snapshot;
+        throw new Error("เฉพาะ Root System Administrator (Level 5) เท่านั้นที่ให้หรือถอดสิทธิ์ Level 5 ได้");
       }
       const by = (JSON.parse(storage.getItem(this.sessionKey) || "{}").email) || "system";
       const now = new Date().toISOString();

@@ -11,7 +11,7 @@
 | Contracts | Viewer | ตารางสถานะสัญญา กรองตามคอลัมน์ ค้นหา Export CSV กดรหัสสัญญาเพื่อดูรายละเอียดและ Log |
 | Confidential | Confidential | ตารางสัญญาลับ |
 | User Case Action | User | Add Case → Update Status → Close Case → Request Due Date (นับ SLA เฉพาะวันทำการ จ.–ศ.) |
-| Master Data | Admin | Contract Records, Departments, People, Contract Types, Action SLA + Import/Export CSV |
+| Master Data | Root | Contract Records, Departments, People, Contract Types, Action SLA + Import/Export CSV |
 | Admin Tools | Admin | อนุมัติ Due Date, กำหนดสิทธิ์ผู้ใช้, ข้อความแจ้งเตือน LINE (Y/R) |
 
 บัญชีอีเมลแต่ละบัญชีได้สิทธิ์ตาม Level เมนูที่ไม่มีสิทธิ์จะถูกซ่อน พิมพ์ URL ตรงก็จะถูกพากลับไป Dashboard และฐานข้อมูลบังคับสิทธิ์เดียวกันด้วย Row Level Security
@@ -21,7 +21,8 @@
 | 1 | Viewer | Contract Viewer | Dashboard, Contracts |
 | 2 | User | Contract User | Dashboard, Contracts, User Case Action |
 | 3 | Confidential | Confidential User | Dashboard, Contracts, Confidential, User Case Action |
-| 4 | Admin | System Administrator | Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools |
+| 4 | Admin | System Administrator | Dashboard, Contracts, Confidential, User Case Action, Admin Tools |
+| 5 | Root | Root System Administrator | Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools |
 
 ## โครงสร้างไฟล์
 
@@ -36,6 +37,7 @@ supabase/migrations/001_schema.sql   ตาราง, role, RLS
 supabase/migrations/002_seed.sql     ข้อมูลตั้งต้น 28 สัญญา + master data
 supabase/migrations/003_entra_roles.sql  สิทธิ์จาก Entra App Role, ประวัติการเปลี่ยนสิทธิ์, กัน Admin หมด
 supabase/migrations/004_menu_access.sql  สิทธิ์อ่าน Master Data ตามเมนูของแต่ละ Level
+supabase/migrations/006_root_level.sql  Level 5 Root: แก้ Master Data ได้คนเดียว, ให้/ถอด Level 5 ได้เฉพาะ Root
 supabase/migrations/005_snapshot_import.sql  นำเข้า production_snapshot.json จาก Admin Tools (เพิ่มหรืออัปเดต ไม่ลบ)
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```
