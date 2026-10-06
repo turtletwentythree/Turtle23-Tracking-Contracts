@@ -780,6 +780,7 @@
     const msg = ({ c, m }) => `[${m.code}] Contract Status Update: ${m.code === "R" ? "Overdue" : "Delayed"}\nสถานะสัญญา: ${m.code === "R" ? "เกิน SLA รวม" : "ใกล้ครบ SLA"}\n\nContract ID: ${c.id}\nContract Name: ${c.name}\nContract Owner: ${c.owner}\nStation Owner: ${c.station_to}\nDue Date: ${fmtDate(c.due_date)}\n\nPlease update the action plan immediately. / กรุณาอัปเดตแผนดำเนินการทันที`;
     return `<section class="panel"><div class="panel-head"><div><h2>Admin Tools <span class="tag tag-dark">Admin Only</span></h2><p>เครื่องมือสำหรับผู้ดูแลระบบ</p></div>
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
+    ${renderImport()}
     <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Decision</th></tr></thead>
       <tbody>${pending.map(r => { const c = S.db.contracts.find(x => x.id === r.contract_id); return `<tr><td>${r.id}</td><td><button class="id-link" data-open="${esc(r.contract_id)}">${esc(r.contract_id)}</button></td>
@@ -806,6 +807,40 @@
       <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>Contract</th><th>Contract Owner</th><th>Status Update</th><th>Message Preview</th><th></th></tr></thead>
       <tbody>${alerts.map((x, i) => `<tr><td><b>${esc(x.c.id)}</b><div class="small muted">${x.c.access_level === "Confidential" ? "Confidential Contract" : esc(x.c.name)}</div></td><td>${esc(x.c.owner)}</td><td>${statusTag(x.m.code)}</td>
         <td><div class="msg-preview" id="msg-${i}">${esc(msg(x))}</div></td><td><button class="btn btn-sm" data-copy="${i}">Copy</button></td></tr>`).join("") || `<tr><td colspan="5" class="empty">ไม่มีสัญญาที่ต้องแจ้งเตือน</td></tr>`}</tbody></table></div></section>`;
+  }
+
+  // Production Snapshot import (production_snapshot.json → database, add or update by key)
+  const IMPORT_LABELS = [["contracts", "Contracts"], ["contract_logs", "Logs"], ["due_date_requests", "Due Date Requests"], ["departments", "Departments"],
+    ["people", "People"], ["contract_types", "Contract Types"], ["contract_templates", "Contract Name Templates"], ["action_sla", "Action SLA"]];
+  function renderImport() {
+    const P = S.snap;
+    const preview = P ? `<div class="current-card" style="margin-top:12px"><b>${esc(P.fileName)}</b>
+        <div class="small muted">Snapshot: ${esc(P.meta.loadedAt ? String(P.meta.loadedAt).replace("T", " ").slice(0, 16) : "-")}</div>
+        <div class="toolbar" style="margin-top:8px">${IMPORT_LABELS.map(([k, l]) => `<span class="tag">${l}: ${(P.data[k] || []).length}</span>`).join("")}</div>
+        ${P.problems.length ? `<div class="login-error show" style="margin-top:8px">พบปัญหา ${P.problems.length} รายการ แก้ไฟล์ก่อนนำเข้า:<br>${P.problems.slice(0, 5).map(esc).join("<br>")}</div>`
+          : `<div class="small" style="margin-top:8px">ตรวจไฟล์ผ่าน: ไม่มี Contract ID ซ้ำ และทุก Log มีสัญญาอยู่จริง</div>
+             <div style="margin-top:10px"><button class="btn btn-primary" data-snap-import>Import to database / นำเข้าข้อมูล</button></div>`}</div>` : "";
+    const done = S.snapResult ? `<div class="current-card" style="margin-top:12px"><b>นำเข้าเรียบร้อย</b><div class="small">นำเข้า ${S.snapResult.imported_contracts ?? "-"} สัญญา และ ${S.snapResult.imported_logs ?? "-"} logs
+      · ในระบบตอนนี้มี ${S.snapResult.contracts ?? "-"} สัญญา · เพิ่มผู้ใช้ใหม่ ${S.snapResult.new_users ?? 0} คน (Viewer)</div></div>` : "";
+    return `<section class="panel"><div class="panel-head"><div><h2>Import Production Snapshot <span class="tag tag-dark">Admin Only</span></h2>
+      <p>เลือกไฟล์ production_snapshot.json เพื่อนำข้อมูลล่าสุดเข้าฐานข้อมูล · สัญญาที่มี Contract ID เดิมจะถูกอัปเดต ที่ยังไม่มีจะถูกเพิ่ม ไม่ลบข้อมูลเดิม · สิทธิ์ผู้ใช้เดิมไม่เปลี่ยน</p></div></div>
+      <div style="padding:0 18px 16px"><input type="file" accept=".json,.jsonp,application/json" data-snap-file>${preview}${done}</div></section>`;
+  }
+  async function readSnapshot(file) {
+    try {
+      const parsed = window.Snapshot.parse(await file.text());
+      S.snap = { fileName: file.name, ...parsed }; S.snapResult = null;
+    } catch (e) { S.snap = null; toast(e.message, true); }
+    render();
+  }
+  async function runImport(btn) {
+    if (!armed(btn, `ยืนยันนำเข้า ${S.snap.data.contracts.length} สัญญา`)) return;
+    btn.disabled = true; btn.textContent = "กำลังนำเข้า...";
+    try {
+      S.snapResult = await window.Store.importSnapshot(S.snap.data);
+      S.snap = null;
+      await reload(); renderNav(); render(); toast("นำเข้าข้อมูลเรียบร้อย");
+    } catch (e) { console.error(e); toast(e.message || String(e), true); btn.disabled = false; btn.textContent = "Import to database / นำเข้าข้อมูล"; }
   }
 
   const LEVEL_RIGHTS = {
@@ -913,6 +948,8 @@
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     $$("[data-copy]", root).forEach(b => b.addEventListener("click", () => copyText($(`#msg-${b.dataset.copy}`).textContent)));
     $("[data-copy-all]", root)?.addEventListener("click", () => copyText($$(".msg-preview", root).map(e => e.textContent).join("\n\n────────\n\n")));
+    $("[data-snap-file]", root)?.addEventListener("change", e => { if (e.target.files[0]) readSnapshot(e.target.files[0]); });
+    $("[data-snap-import]", root)?.addEventListener("click", e => runImport(e.currentTarget));
     $("[data-reset-demo]", root)?.addEventListener("click", async () => {
       if (!armed($("[data-reset-demo]", root), "กดอีกครั้งเพื่อยืนยัน")) return;
       await window.Store.resetDemo(); await reload(); renderNav(); render(); toast("รีเซ็ตข้อมูลแล้ว");

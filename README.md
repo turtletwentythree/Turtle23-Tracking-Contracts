@@ -36,13 +36,14 @@ supabase/migrations/001_schema.sql   ตาราง, role, RLS
 supabase/migrations/002_seed.sql     ข้อมูลตั้งต้น 28 สัญญา + master data
 supabase/migrations/003_entra_roles.sql  สิทธิ์จาก Entra App Role, ประวัติการเปลี่ยนสิทธิ์, กัน Admin หมด
 supabase/migrations/004_menu_access.sql  สิทธิ์อ่าน Master Data ตามเมนูของแต่ละ Level
+supabase/migrations/005_snapshot_import.sql  นำเข้า production_snapshot.json จาก Admin Tools (เพิ่มหรืออัปเดต ไม่ลบ)
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```
 
 ## ตั้งค่า Supabase
 
 1. สร้างโปรเจกต์ที่ https://supabase.com
-2. เปิด **SQL Editor** แล้วรัน `supabase/migrations/001_schema.sql`, `002_seed.sql`, `003_entra_roles.sql` และ `004_menu_access.sql` ตามลำดับ
+2. เปิด **SQL Editor** แล้วรัน `supabase/migrations/001_schema.sql`, `002_seed.sql`, `003_entra_roles.sql`, `004_menu_access.sql` และ `005_snapshot_import.sql` ตามลำดับ
 3. ตั้งตัวเองเป็น admin คนแรก (ใช้อีเมล Microsoft 365 ของคุณ):
    ```sql
    insert into public.user_access (email, display_name, role)
@@ -124,3 +125,13 @@ python3 -m http.server 8000
 - **Days on Hand** = วันทำการที่ค้างอยู่กับ Station Owner ปัจจุบัน
 - **Balance** = Total SLA − Days Used
 - **R = Overdue** เมื่อ Balance ติดลบหรือเลย Due Date · **Y = Delayed** เมื่อเหลือ ≤ 20% ของ SLA (อย่างน้อย 2 วัน) · **G = On Track**
+
+## นำข้อมูล Production ล่าสุดเข้าระบบ
+
+1. (ครั้งแรกครั้งเดียว) รัน `supabase/migrations/005_snapshot_import.sql` ใน Supabase SQL Editor
+2. เข้าเว็บด้วยบัญชี Admin → **Admin Tools** → **Import Production Snapshot** → เลือกไฟล์ `production_snapshot.json`
+3. ตรวจจำนวนแถวที่แสดง แล้วกด **Import to database** (กดยืนยันอีกครั้ง)
+
+การนำเข้าทำในฐานข้อมูลครั้งเดียวแบบทั้งหมดหรือไม่มีเลย: สัญญาที่มี Contract ID เดิมถูกอัปเดต ที่ไม่มีถูกเพิ่ม ไม่ลบข้อมูลเดิม
+ระดับสิทธิ์ใน Users & Roles ไม่เปลี่ยน คนใน People Master ที่ยังไม่มีบัญชีจะถูกเพิ่มเป็น Viewer
+ไฟล์ข้อมูลจริงห้าม commit ลง repo นี้ (repo เป็น public)

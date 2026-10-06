@@ -118,6 +118,32 @@
         if (i >= 0) this.db[table][i] = { ...this.db[table][i], ...r }; else this.db[table].push(r);
       });
     }
+    // Demo stand-in for import_snapshot() in 005_snapshot_import.sql: add or update by key, never delete
+    async importSnapshot(data) {
+      const keyOf = {
+        contracts: r => r.id, contract_logs: r => `${r.contract_id}#${r.log_no}`, departments: r => r.name, people: r => r.name,
+        contract_types: r => `${r.classification}|${r.type}|${r.sub_type || ""}`, action_sla: r => r.action,
+        contract_templates: r => r.selection_label, due_date_requests: r => r.details?.requestId || `${r.contract_id}|${r.requested_due}`
+      };
+      Object.entries(keyOf).forEach(([t, key]) => {
+        this.db[t] = this.db[t] || [];
+        (data[t] || []).forEach(row => {
+          const i = this.db[t].findIndex(x => key(x) === key(row));
+          if (i >= 0) { if (t !== "due_date_requests") this.db[t][i] = { ...this.db[t][i], ...row }; }
+          else this.db[t].push(t === "contracts" ? { ...row } : { id: this.nextId(t), ...row });
+        });
+      });
+      let added = 0;
+      this.guardAccess(this.db.user_access, () => {
+        this.db.user_access = JSON.parse(JSON.stringify(this.db.user_access));
+        this.db.people.filter(p => p.email && p.email.includes("@") && !this.db.user_access.some(u => u.email === p.email)).forEach(p => {
+          this.db.user_access.push({ email: p.email, display_name: p.name, department: p.department, role: "viewer", active: true, source: "manual" }); added++;
+        });
+      });
+      this.persist();
+      return { imported_contracts: (data.contracts || []).length, imported_logs: (data.contract_logs || []).length,
+        contracts: this.db.contracts.length, contract_logs: this.db.contract_logs.length, new_users: added };
+    }
     async resetDemo() { storage.removeItem(this.key); await this.init(); }
   }
 
@@ -198,6 +224,16 @@
     async remove(table, key) {
       const { error } = await this.client.from(table).delete().eq(KEYS[table], key);
       if (error) throw error;
+    }
+    // One transaction on the server (005_snapshot_import.sql); Admin only; adds or updates, never deletes
+    async importSnapshot(data) {
+      const { data: counts, error } = await this.client.rpc("import_snapshot", { p: data });
+      if (error) {
+        if (/import_snapshot/.test(error.message) && /find|exist|schema cache/i.test(error.message))
+          throw new Error("ฐานข้อมูลยังไม่มีคำสั่งนำเข้า กรุณารัน supabase/migrations/005_snapshot_import.sql ใน Supabase SQL Editor ก่อน");
+        throw error;
+      }
+      return counts;
     }
     async upsertMany(table, rows) {
       const k = KEYS[table];

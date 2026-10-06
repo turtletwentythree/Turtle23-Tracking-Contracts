@@ -1,0 +1,6 @@
+
+# Real data exports must never be committed (public repo)
+production_snapshot*.json*
+*.sqlite
+contracts.csv
+logs.csv
