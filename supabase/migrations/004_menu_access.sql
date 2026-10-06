@@ -3,7 +3,8 @@
 --   Level 1 Viewer        Dashboard, Contracts
 --   Level 2 User          Dashboard, Contracts, User Case Action
 --   Level 3 Confidential  Dashboard, Contracts, Confidential, User Case Action
---   Level 4 Admin         Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools
+--   Level 4 Admin         Dashboard, Contracts, Confidential, User Case Action, Admin Tools
+--   Level 5 Root         Dashboard, Contracts, Confidential, User Case Action, Master Data, Admin Tools
 --
 -- The web app hides menus and blocks typed URLs; these policies make the data match.
 -- Contracts, logs and due-date requests already follow these levels (001_schema.sql):
