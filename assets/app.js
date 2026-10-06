@@ -439,6 +439,17 @@
   }
 
   // ───────────── Contract detail drawer ─────────────
+  // Attachments of a log (from the Production Snapshot): each link opens the file in Google Drive,
+  // or its Drive folder when the snapshot has no link to the file itself
+  const safeUrl = u => { try { const x = new URL(u); return x.protocol === "https:" && /(^|\.)google\.com$/.test(x.hostname) ? x.href : ""; } catch (e) { return ""; } };
+  function logFiles(l) {
+    const files = (l.details?.attachments || []).map(a => {
+      const file = safeUrl(a.url || a.downloadUrl);
+      return { name: a.originalFileName || a.fileName || "File", url: file || safeUrl(a.cloudFolderUrl), folder: !file };
+    }).filter(a => a.url);
+    return files.length ? `<div class="log-files">${files.map(f => `<a class="log-file" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"
+      title="${f.folder ? "เปิดโฟลเดอร์ใน Google Drive" : "เปิดไฟล์ใน Google Drive"}">${f.folder ? "📁" : "📎"} ${esc(f.name)}</a>`).join("")}</div>` : "";
+  }
   function openDrawer(id) {
     const c = S.db.contracts.find(x => x.id === id);
     if (!c) return;
@@ -464,7 +475,7 @@
             <div class="timeline">${logs.map(l => `<div class="tl-item"><strong>#${l.log_no} ${esc(l.action || "-")}</strong> <span class="small muted">Cycle ${l.cycle} · SLA ${l.sla ?? "-"} วัน</span>
               <div class="small">From <b>${esc(l.from_person || "-")}</b> → To <b>${esc(l.to_person || "-")}</b></div>
               <div class="small muted">In ${fmtDate(l.in_date)} · Out ${l.out_date ? fmtDate(l.out_date) : "-"} · by ${esc(l.updated_by || "-")}</div>
-              ${l.reason ? `<div class="small">${esc(l.reason)}</div>` : ""}</div>`).join("") || `<div class="muted">No log</div>`}</div></div>
+              ${l.reason ? `<div class="small">${esc(l.reason)}</div>` : ""}${logFiles(l)}</div>`).join("") || `<div class="muted">No log</div>`}</div></div>
           ${reqs.length ? `<div><p class="section-title">Due Date Requests</p><table class="grid compact"><thead><tr><th>Requested</th><th>Reason</th><th>Status</th></tr></thead><tbody>
             ${reqs.map(r => `<tr><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody></table></div>` : ""}
           ${can(2) && c.status === "Open" ? `<div class="form-actions"><button class="btn" data-goto-step="update" data-cid="${esc(c.id)}">Update Status</button>
