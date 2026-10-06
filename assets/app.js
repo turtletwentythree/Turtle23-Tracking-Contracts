@@ -187,7 +187,7 @@
   function peopleByDept(selected, key = "name", list = activePeople()) {
     const groups = {};
     list.filter(p => p[key]).forEach(p => { (groups[p.department || "Other"] = groups[p.department || "Other"] || []).push(p); });
-    return Object.keys(groups).sort((a, b) => a.localeCompare(b)).map(d => `<optgroup label="${esc(d)}">${groups[d].sort((a, b) => a.name.localeCompare(b.name))
+    return Object.keys(groups).sort((a, b) => a.localeCompare(b)).map(d => `<optgroup label="${esc(d)}">${groups[d].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
       .map(p => `<option value="${esc(p[key])}" ${p[key] === selected ? "selected" : ""}>${esc(key === "email" ? `${p.name} · ${p.email}` : p.name)}</option>`).join("")}</optgroup>`).join("");
   }
 
@@ -196,7 +196,14 @@
     const db = await window.Store.loadAll();
     Object.assign(S.db, db);
     S.db.contracts.sort((a, b) => a.id.localeCompare(b.id));
-    S.masterDraft = null;
+    S.loadedAt = Date.now();
+    if (!S.masterDraft?.dirty) S.masterDraft = null;
+  }
+  // Rows added in Supabase (SQL Editor, another user) show up without a hard refresh:
+  // data older than 30 seconds is reloaded when the page changes or the tab comes back.
+  async function refreshIfStale() {
+    if (window.Store.mode !== "supabase" || !S.user || Date.now() - (S.loadedAt || 0) < 30000) return false;
+    try { await reload(); return true; } catch (e) { console.warn("Refresh failed", e); return false; }
   }
 
   // ───────────── Auth ─────────────
@@ -832,7 +839,7 @@
     activePeople().filter(p => p.email).forEach(p => out.set(p.email.toLowerCase(), { name: p.name, email: p.email.toLowerCase() }));
     (S.db.user_access || []).filter(u => u.active !== false && u.email && !out.has(u.email.toLowerCase()))
       .forEach(u => out.set(u.email.toLowerCase(), { name: u.display_name || u.email, email: u.email.toLowerCase() }));
-    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return [...out.values()].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   }
   // CC options grouped by department: People Master by their department, other active users by theirs
   function ccByDept() {
@@ -1371,7 +1378,7 @@
       exportCsv(`contracts_${todayISO()}.csv`, CONTRACT_COLS.map(c => c.label), rows);
     }));
     // user case
-    $$("[data-step]", root).forEach(b => b.addEventListener("click", () => { S.caseStep = b.dataset.step; render(); }));
+    $$("[data-step]", root).forEach(b => b.addEventListener("click", async () => { S.caseStep = b.dataset.step; await refreshIfStale(); render(); }));
     $$("[data-class]", root).forEach(b => b.addEventListener("click", () => { S.addForm = { ...S.addForm, classification: b.dataset.class, type: "", sub_type: "" }; render(); }));
     $$("[data-add]", root).forEach(el => el.addEventListener(el.tagName === "SELECT" || el.type === "date" ? "change" : "input", () => {
       const k = el.dataset.add; S.addForm[k] = el.value;
@@ -1449,7 +1456,11 @@
   async function boot() {
     await window.Store.init();
     initLogin();
-    window.addEventListener("hashchange", () => { if (S.user) { closeDrawer(); ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); route(); } });
+    window.addEventListener("hashchange", () => { if (S.user) { closeDrawer(); ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); refreshIfStale().finally(route); } });
+    // Back on the tab: pick up new data; read-only pages redraw, forms keep what the user typed
+    document.addEventListener("visibilitychange", async () => {
+      if (document.visibilityState === "visible" && await refreshIfStale()) { renderNav(); if (["dashboard", "contracts", "confidential"].includes(S.view)) render(); }
+    });
     $("#nav").addEventListener("click", e => { const b = e.target.closest("[data-view]"); if (b) location.hash = "#/" + b.dataset.view; });
     $("#refreshBtn").addEventListener("click", () => guard(async () => { await reload(); renderNav(); render(); }, "รีเฟรชข้อมูลแล้ว"));
     $("#profileTrigger").addEventListener("click", e => { e.stopPropagation(); $("#profileDropdown").hidden = !$("#profileDropdown").hidden; });
