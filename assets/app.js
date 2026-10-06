@@ -945,6 +945,9 @@
   const deptOptions = () => ["", ...(S.db.departments || []).map(d => d.name)];
   const classOptions = () => uniq([CLASS_DAY, CLASS_CONF, ...(S.db.contract_types || []).map(t => t.classification)]);
   const countWhere = (rows, fn) => (rows || []).filter(fn).length;
+  const peopleOptions = () => ["", ...(S.db.people || []).map(p => p.name)];
+  const actionOptions = () => uniq(["Draft Created", ...(S.db.action_sla || []).map(a => a.action), "Signed / Completed", "Completed", "Cancelled"]);
+  const ALERT_OPTIONS = ["", "Green >>G=On Track", "Yellow >>Y=Delayed", "Red >>R=At Risk", "Gray >>U=Uncontrol", "Black >>B=Completed", "Black >>B=Cancelled"];
   const MASTER = {
     contracts: { title: "Contract Records", sub: "แก้ไขหรือลบเคสที่สร้างผิดจาก Add Case", required: ["id", "name"], cols: [
       ["id", "Contract ID", "ro"], ["name", "Contract Name"], ["department", "Department / Restaurant", deptOptions], ["owner", "Contract Owner"],
@@ -973,6 +976,13 @@
     action_sla: { title: "Action SLA", sub: "SLA ของแต่ละ Action ใน Update Status", track: true, required: ["action"], unique: [["action"]],
       cols: [["action", "Action", "key"], ["description", "Description / รายละเอียด"], ["sla", "Fixed SLA (Working Days)", "num"], ["rule", "SLA Rule / วิธีนับ"], ["active", "Active", "bool"]],
       uses: r => countWhere(S.db.contract_logs, l => l.action === r.action) },
+    contract_logs: { title: "Log View Detail", sub: "แก้ไขข้อมูลใน Log View Detail ของแต่ละสัญญาโดยตรง · เลือกสัญญาก่อน หรือค้นหา", track: true, fixed: true,
+      byContract: true, required: ["action"], unique: [["contract_id", "log_no"]], cols: [
+        ["contract_id", "Contract ID", "ro"], ["log_no", "Log No", "ro"], ["cycle", "Cycle", "num"], ["from_person", "From", peopleOptions],
+        ["to_person", "To", peopleOptions], ["in_date", "In", "date"], ["out_date", "Out", "date"], ["sla", "SLA", "num"],
+        ["days_on_hand", "Days on Hand", "num"], ["alert", "Alert", ALERT_OPTIONS], ["delay_reason", "Delay Reason"], ["action", "Action", actionOptions],
+        ["action_reason_type", "Reason Type"], ["action_reason", "Action Reason"], ["reason", "Reason / Remark"], ["approval_type", "Approval Type"],
+        ["approval", "Approval"], ["corrective_action", "Corrective Action"], ["updated_by", "Updated By"], ["id", "Row", "ro"]] },
     log_view_columns: { title: "Log View Columns", sub: "หัวตาราง Log View Detail (table) และแถวในหน้าต่าง Action (detail) · ซ่อนได้ด้วย Visible", track: true,
       fixed: true, required: ["label_en"], unique: [["section", "key"]],
       cols: [["section", "Section", "ro"], ["key", "Field", "ro"], ["position", "Order", "num"], ["label_en", "Label (EN)"], ["label_th", "Label (TH)"], ["visible", "Visible", "bool"]] },
@@ -1006,14 +1016,23 @@
     if (!S.masterDraft || S.masterDraft.table !== t) {
       const def = MASTER[t];
       let src = t === "contracts" ? visibleContracts() : S.db[t] || [];
+      if (t === "contract_logs") {
+        const ids = new Set(visibleContracts().map(c => c.id));
+        src = src.filter(l => ids.has(l.contract_id)).sort((a, b) => a.contract_id.localeCompare(b.contract_id) || a.log_no - b.log_no);
+      }
       // Log View Columns not saved yet: start from the built-in headers and save them all on the first Save
       const fromDefaults = t === "log_view_columns" && !src.length;
       if (fromDefaults) src = LOG_VIEW_DEFAULT.map(r => ({ ...r, position: LOG_VIEW_DEFAULT.filter(x => x.section === r.section).indexOf(r) + 1 }));
       if (t === "log_view_columns") src = [...src].sort((a, b) => a.section.localeCompare(b.section) || a.position - b.position);
       const rows = JSON.parse(JSON.stringify(src));
+      // Logs imported before 007 keep some values only in `details`: show them as Log View does
+      if (t === "contract_logs") rows.forEach(r => def.cols.forEach(([k]) => {
+        if (r[k] == null || r[k] === "") { const v = lf(r, k); if (v !== "" && v != null && typeof v !== "object") r[k] = v; }
+      }));
       rows.forEach(r => { r.__o = masterSig(def, r); });
       S.masterDraft = { table: t, rows, removed: [], dirty: false, problems: [], fromDefaults };
       S.masterQ = ""; S.masterShow = "all";
+      if (def.byContract && !rows.some(r => r.contract_id === S.masterContract)) S.masterContract = rows[0]?.contract_id || "";
     }
     return S.masterDraft;
   }
@@ -1068,6 +1087,8 @@
     return `<section class="panel">
       <div class="panel-head"><div><h2>${esc(def.title)}</h2><p>${esc(def.sub)} · <span data-master-count>${D.rows.length}</span> rows${changed ? ` · <b style="color:var(--t23-orange-dark)">ยังไม่บันทึก ${changed} แถว</b>` : ""}</p></div>
         <div class="toolbar">
+          ${def.byContract ? `<select class="cell-input master-show" data-master-contract><option value="">ทุกสัญญา / All contracts</option>${uniq(D.rows.map(r => r.contract_id)).map(id =>
+            `<option ${S.masterContract === id ? "selected" : ""}>${esc(id)}</option>`).join("")}</select>` : ""}
           <input class="cell-input master-search" type="search" data-master-q placeholder="ค้นหา…" value="${esc(S.masterQ || "")}">
           <select class="cell-input master-show" data-master-show>${showOpts.map(([v, l]) => `<option value="${v}" ${S.masterShow === v ? "selected" : ""}>${l}</option>`).join("")}</select>
           ${editable && t !== "contracts" && !def.fixed ? `<button class="btn" data-master-add>+ Add Row</button>` : ""}
@@ -1078,7 +1099,7 @@
       <div class="table-wrap" style="max-height:calc(100vh - 300px)"><table class="grid compact">
         <thead><tr>${def.cols.map(c => `<th>${esc(c[1])}${(def.required || []).includes(c[0]) && c[2] !== "ro" ? ' <span class="req">*</span>' : ""}</th>`).join("")}${extra ? `<th>${esc(extra.label)}</th>` : ""}
           ${track ? `<th title="แถวที่แก้ไขเองจะถูก Lock ไว้ Import จะไม่เขียนทับ · เอาเครื่องหมายออกเพื่อให้ Import อัปเดตได้">Locked</th><th>Edited by</th>` : ""}${canDel ? "<th></th>" : ""}</tr></thead>
-        <tbody>${D.rows.map((r, i) => `<tr data-ri="${i}" class="${rowChanged(def, r) ? "row-changed" : ""}${r.active === false || r.visible === false ? " row-inactive" : ""}">${def.cols.map(c => `<td>${cell(r, i, c)}</td>`).join("")}${extra ? `<td class="small">${extra.value(r)}</td>` : ""}
+        <tbody>${D.rows.map((r, i) => def.byContract && S.masterContract && r.contract_id !== S.masterContract ? "" : `<tr data-ri="${i}" class="${rowChanged(def, r) ? "row-changed" : ""}${r.active === false || r.visible === false ? " row-inactive" : ""}">${def.cols.map(c => `<td>${cell(r, i, c)}</td>`).join("")}${extra ? `<td class="small">${extra.value(r)}</td>` : ""}
           ${track ? `<td class="center"><input type="checkbox" data-cell="${i}" data-k="locked" ${r.locked ? "checked" : ""} ${editable ? "" : "disabled"}></td><td class="small nowrap">${r.__new ? "" : edited(r)}</td>` : ""}
           ${canDel ? `<td><button class="btn btn-sm btn-danger" data-master-del="${i}" title="Delete">Delete</button></td>` : ""}</tr>`).join("") || `<tr><td colspan="${def.cols.length + 4}" class="empty">No rows</td></tr>`}</tbody>
       </table></div></section>${track ? renderMasterHistory(t) : ""}`;
@@ -1094,7 +1115,7 @@
       return Object.keys({ ...a.before, ...a.after }).filter(k => !skip.includes(k) && JSON.stringify(a.before?.[k] ?? null) !== JSON.stringify(a.after?.[k] ?? null))
         .map(k => `${k}: ${a.before?.[k] ?? "—"} → ${a.after?.[k] ?? "—"}`).join(" · ");
     };
-    return `<details class="panel master-history"><summary><b>History</b> <span class="muted">· ประวัติการแก้ไข ${esc(MASTER[t].title)} ${all ? `(${rows.length} รายการล่าสุด)` : "(แสดงหลังรัน 008_master_data.sql)"}</span></summary>
+    return `<details class="panel master-history"><summary><b>History</b> <span class="muted">· ประวัติการแก้ไข ${esc(MASTER[t].title)} ${all ? `(${rows.length} รายการล่าสุด)` : `(แสดงหลังรัน ${t === "contract_logs" ? "009_log_edit.sql" : "008_master_data.sql"})`}</span></summary>
       ${rows.length ? `<div class="table-wrap" style="max-height:360px"><table class="grid compact"><thead><tr><th>When</th><th>By</th><th>Source</th><th>Row</th><th>Change</th></tr></thead><tbody>
         ${rows.map(a => `<tr><td class="nowrap">${esc(String(a.changed_at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(a.changed_by || "")}</td>
           <td>${a.source === "import" ? "Import" : "แก้ไขเอง"}</td><td>${esc(a.row_key || "")}</td><td class="small">${esc(changes(a))}</td></tr>`).join("")}</tbody></table></div>`
@@ -1116,16 +1137,18 @@
   function applyMasterFilter(root) {
     const D = S.masterDraft; if (!D) return;
     const def = MASTER[D.table], q = (S.masterQ || "").trim().toLowerCase(), show = S.masterShow || "all";
+    const cid = def.byContract ? S.masterContract || "" : "";
     let n = 0;
     $$("tr[data-ri]", root).forEach(tr => {
       const r = D.rows[Number(tr.dataset.ri)];
       const on = r.active !== false && r.visible !== false;
-      const ok = (!q || def.cols.map(c => r[c[0]] ?? "").join(" ").toLowerCase().includes(q))
+      const ok = (!cid || r.contract_id === cid) && (!q || def.cols.map(c => r[c[0]] ?? "").join(" ").toLowerCase().includes(q))
         && (show === "all" || (show === "active" && on) || (show === "inactive" && !on) || (show === "locked" && r.locked) || (show === "changed" && rowChanged(def, r)));
       tr.hidden = !ok; if (ok) n++;
     });
     const c = $("[data-master-count]", root);
-    if (c) c.textContent = n === D.rows.length ? String(n) : `${n} / ${D.rows.length}`;
+    const total = cid ? D.rows.filter(r => r.contract_id === cid).length : D.rows.length;
+    if (c) c.textContent = n === total ? String(n) : `${n} / ${total}`;
   }
 
   async function saveMaster() {
@@ -1225,7 +1248,7 @@
              <div style="margin-top:10px"><button class="btn btn-primary" data-snap-import>Import to database / นำเข้าข้อมูล</button></div>`}</div>` : "";
     const done = S.snapResult ? `<div class="current-card" style="margin-top:12px"><b>นำเข้าเรียบร้อย</b><div class="small">นำเข้า ${S.snapResult.imported_contracts ?? "-"} สัญญา และ ${S.snapResult.imported_logs ?? "-"} logs
       · ในระบบตอนนี้มี ${S.snapResult.contracts ?? "-"} สัญญา · เพิ่มผู้ใช้ใหม่ ${S.snapResult.new_users ?? 0} คน (Viewer)
-      ${S.snapResult.locked_kept ? ` · Master Data ที่แก้ไขเอง (Locked) ${S.snapResult.locked_kept} แถว ไม่ถูกเขียนทับ` : ""}</div></div>` : "";
+      ${S.snapResult.locked_kept ? ` · แถวที่แก้ไขในเว็บ (Locked) ${S.snapResult.locked_kept} แถว ไม่ถูกเขียนทับ` : ""}</div></div>` : "";
     return `<section class="panel"><div class="panel-head"><div><h2>Import Production Snapshot <span class="tag tag-dark">Admin Only</span></h2>
       <p>เลือกไฟล์ production_snapshot.json เพื่อนำข้อมูลล่าสุดเข้าฐานข้อมูล · สัญญาที่มี Contract ID เดิมจะถูกอัปเดต ที่ยังไม่มีจะถูกเพิ่ม ไม่ลบข้อมูลเดิม · สิทธิ์ผู้ใช้เดิมไม่เปลี่ยน</p></div></div>
       <div style="padding:0 18px 16px"><input type="file" accept=".json,.jsonp,application/json" data-snap-file>${preview}${done}</div></section>`;
@@ -1355,6 +1378,7 @@
     if (S.masterDraft && $("[data-master-q]", root)) applyMasterFilter(root);
     $("[data-master-q]", root)?.addEventListener("input", e => { S.masterQ = e.target.value; applyMasterFilter(root); });
     $("[data-master-show]", root)?.addEventListener("change", e => { S.masterShow = e.target.value; applyMasterFilter(root); });
+    $("[data-master-contract]", root)?.addEventListener("change", e => { S.masterContract = e.target.value; render(); });
     $("[data-master-add]", root)?.addEventListener("click", () => {
       const D = S.masterDraft, row = { __new: true, active: true };
       D.rows.push(row); D.dirty = true; S.masterQ = ""; S.masterShow = "all"; render();
@@ -1403,7 +1427,7 @@
   async function boot() {
     await window.Store.init();
     initLogin();
-    window.addEventListener("hashchange", () => { if (S.user) { closeDrawer(); route(); } });
+    window.addEventListener("hashchange", () => { if (S.user) { closeDrawer(); ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); route(); } });
     $("#nav").addEventListener("click", e => { const b = e.target.closest("[data-view]"); if (b) location.hash = "#/" + b.dataset.view; });
     $("#refreshBtn").addEventListener("click", () => guard(async () => { await reload(); renderNav(); render(); }, "รีเฟรชข้อมูลแล้ว"));
     $("#profileTrigger").addEventListener("click", e => { e.stopPropagation(); $("#profileDropdown").hidden = !$("#profileDropdown").hidden; });
