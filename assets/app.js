@@ -158,10 +158,17 @@
     $("#demoAccountSection").hidden = !demo;
     $("#loginForm").hidden = !passwordAllowed;
     $("#loginDivider").hidden = !passwordAllowed;
-    $("#msLogin").addEventListener("click", async e => {
-      const b = e.currentTarget;
+    $("#msForm").addEventListener("submit", async e => {
+      e.preventDefault();
+      const domain = (window.APP_CONFIG?.EMAIL_DOMAIN || "turtle23.com").toLowerCase();
+      let email = $("#msEmail").value.trim().toLowerCase();
+      if (email && !email.includes("@")) email = `${email}@${domain}`;
+      if (!/^[^@\s]+@[^@\s]+$/.test(email)) return showLoginError("กรุณากรอกอีเมลบริษัท เช่น name@" + domain);
+      if (!email.endsWith("@" + domain)) return showLoginError(`ใช้ได้เฉพาะอีเมล @${domain} ของ Turtle23 เท่านั้น`);
+      showLoginError("");
+      const b = $("#msLogin");
       b.disabled = true; $("#msLoginText").textContent = "Redirecting to Microsoft...";
-      try { await window.Store.signInMicrosoft(); }
+      try { await window.Store.signInMicrosoft(email); }
       catch (err) { showLoginError(err.message); b.disabled = false; $("#msLoginText").textContent = "Sign in with Microsoft 365"; }
     });
     $("#passwordToggle").addEventListener("click", e => {

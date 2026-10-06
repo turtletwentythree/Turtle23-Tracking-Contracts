@@ -57,6 +57,9 @@ body:not(.auth-ready) .app-shell { display: none; }
 .password-toggle { border: 0; border-left: 1px solid var(--line); background: none; font-weight: 700; padding: 0 0 0 12px; height: 70%; }
 .login-error { display: none; background: var(--red-soft); color: var(--red); border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; }
 .login-error.show { display: block; }
+.ms-form { display: grid; gap: 8px; }
+.ms-email-label { font-size: 13px; font-weight: 700; text-align: left; }
+.ms-email { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #8C8C8C; border-radius: 6px; font-size: 15px; box-sizing: border-box; }
 .ms-button { width: 100%; height: 48px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px solid #8C8C8C; border-radius: 6px; background: #fff; color: #2F2F2F; font-weight: 700; font-size: 15px; }
 .ms-button:hover { background: #F3F3F3; }
 .ms-button:disabled { opacity: .6; cursor: wait; }

@@ -52,7 +52,7 @@ supabase/migrations/004_menu_access.sql  สิทธิ์อ่าน Master D
 
 ## เข้าระบบด้วย Microsoft 365
 
-ผู้ใช้กด **Sign in with Microsoft 365** แล้วล็อกอินด้วยบัญชีบริษัท ระบบจับคู่อีเมลกับตาราง `user_access` เพื่อกำหนดสิทธิ์
+ผู้ใช้พิมพ์อีเมล @turtle23.com แล้วกด **Sign in with Microsoft 365** ระบบส่งอีเมลเป็น `login_hint` ไปที่ Microsoft Entra ของ Turtle23 (ล็อก tenant ด้วย Azure Tenant URL) และถามรหัสผ่านทุกครั้ง ระบบจับคู่อีเมลกับตาราง `user_access` เพื่อกำหนดสิทธิ์
 
 **A. ลงทะเบียนแอปใน Microsoft Entra ID** (https://entra.microsoft.com → App registrations → New registration)
 - Name: `Contract Tracking System`

@@ -84,7 +84,7 @@ on conflict (email) do update set role = 'admin', active = true;
 5. **Secret Value**: วางค่าจากขั้นที่ 7 ข้อ 10
 6. **Azure Tenant URL**: `https://login.microsoftonline.com/` ตามด้วย Directory (tenant) ID
 7. กด **Save**
-8. เปิดเว็บ กด **Sign in with Microsoft 365** แล้วเข้าระบบด้วยอีเมลที่ตั้งเป็น Admin ในขั้นที่ 2
+8. เปิดเว็บ พิมพ์อีเมลที่ตั้งเป็น Admin ในขั้นที่ 2 (เช่น name@turtle23.com) กด **Sign in with Microsoft 365** แล้วใส่รหัสผ่านในหน้า Microsoft ของ Turtle23
 
 ## ขั้นที่ 9 (ทำทีหลังได้): ให้สิทธิ์ผ่าน Entra
 ข้ามได้ถ้าจะกำหนดสิทธิ์ในเว็บ (Admin Tools → Users & Roles) อย่างเดียว

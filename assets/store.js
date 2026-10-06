@@ -148,12 +148,13 @@
       }
       return { id: authUser.id, email: row.email, username: row.email, display_name: row.display_name || row.email, role: row.role };
     }
-    async signInMicrosoft() {
+    async signInMicrosoft(email) {
       const redirectTo = window.location.origin + window.location.pathname;
       const { error } = await this.client.auth.signInWithOAuth({
         provider: "azure",
-        // prompt=login: Microsoft always asks for the email and password, even if already signed in to M365
-        options: { scopes: "openid email profile offline_access", redirectTo, queryParams: { prompt: "login" } }
+        // prompt=login: Microsoft always asks for the password, even if already signed in to M365.
+        // login_hint pre-fills the Turtle23 email typed on our page (tenant is locked by the Azure provider's Tenant URL).
+        options: { scopes: "openid email profile offline_access", redirectTo, queryParams: { prompt: "login", login_hint: email || "" } }
       });
       if (error) throw error; // on success the browser leaves for login.microsoftonline.com
     }
