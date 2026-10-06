@@ -183,6 +183,13 @@
   }
   function activeTypes() { return S.db.contract_types.filter(t => t.active !== false); }
   function activePeople(dept) { return S.db.people.filter(p => p.active !== false && (!dept || p.department === dept)); }
+  // People dropdown grouped by department (one <optgroup> each, names A–Z); key = "name" or "email"
+  function peopleByDept(selected, key = "name", list = activePeople()) {
+    const groups = {};
+    list.filter(p => p[key]).forEach(p => { (groups[p.department || "Other"] = groups[p.department || "Other"] || []).push(p); });
+    return Object.keys(groups).sort((a, b) => a.localeCompare(b)).map(d => `<optgroup label="${esc(d)}">${groups[d].sort((a, b) => a.name.localeCompare(b.name))
+      .map(p => `<option value="${esc(p[key])}" ${p[key] === selected ? "selected" : ""}>${esc(key === "email" ? `${p.name} · ${p.email}` : p.name)}</option>`).join("")}</optgroup>`).join("");
+  }
 
   // ───────────── Data loading ─────────────
   async function reload() {
@@ -352,7 +359,8 @@
         <section class="panel">
           <div class="panel-head"><div><h2>5. Longest pending on hand</h2><p>R = Overdue · Highest accumulated working days first</p></div></div>
           <div class="table-wrap" style="max-height:760px">
-            <table class="grid compact" data-widget="longest">
+            <table class="grid compact longest-table" data-widget="longest">
+              <colgroup><col class="c-details"><col class="c-owner"><col class="c-day"></colgroup>
               <thead><tr><th>Contract Details</th><th>Ownership</th><th class="num">Day</th></tr></thead>
               <tbody>${overdue.map(x => `<tr class="pending-item" data-row="${esc(x.c.id)}">
                   <td class="cd"><button class="id-link" data-goto="${esc(x.c.id)}">${esc(x.c.id)}</button> <span class="tag ${DASH_TAG[x.code]}">${DASH_LABEL[x.code]}</span>
@@ -732,7 +740,7 @@
         <div class="form-grid">
           <div class="field"><label>Department / Restaurant <span class="req">*</span></label><select class="select" data-add="department">${opt(depts.map(d => d.name), F.department, "Select Department")}</select></div>
           <div class="field"><label>Contract Owner <span class="req">*</span></label><select class="select" data-add="owner">${opt(people.map(p => p.name), F.owner, F.department ? "Select Contract Owner" : "Select Department first")}</select></div>
-          <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to">${opt(activePeople().map(p => p.name), F.station_to, "Same as Contract Owner")}</select></div>
+          <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to"><option value="">Same as Contract Owner</option>${peopleByDept(F.station_to)}</select></div>
           <div class="field"><label>Add Case Date / วันที่รับเรื่อง</label><input class="input" type="date" data-add="add_case_date" value="${esc(start)}"></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" data-add="remark">${esc(F.remark || "")}</textarea></div>
         </div>
@@ -806,11 +814,12 @@
           <div class="field"><label>Action <span class="req">*</span></label><select class="select" id="upAction"><option value="">Select Action</option>
             ${acts.map(a => `<option value="${esc(a.action)}">${esc(a.action)} · ${a.sla} วัน — ${esc(a.description || "")}</option>`).join("")}</select></div>
           <div class="field"><label>Send to / ส่งให้ <span class="req">*</span></label><select class="select" id="upTo"><option value="">Select person</option>
-            ${activePeople().map(p => `<option ${c && c.owner === p.name ? "" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
+            ${peopleByDept()}</select></div>
           <div class="field"><label>Date / วันที่</label><input class="input" type="date" id="upDate" value="${todayISO()}"></div>
           <div class="field full"><label>Reason / เหตุผล</label><textarea class="input" rows="2" id="upReason" placeholder="รายละเอียดการดำเนินการ"></textarea></div>
           <div class="field full"><label>CC E-Mail / สำเนาถึง</label>
-            <div class="cc-box"><span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="เลือกจากรายชื่อ หรือพิมพ์อีเมลแล้วกด Enter"></div>
+            <div class="cc-row"><select class="select cc-pick" id="upCcPick"><option value="">เลือกตามแผนก / Pick by department</option>${ccByDept()}</select>
+            <div class="cc-box"><span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="หรือพิมพ์อีเมลแล้วกด Enter"></div></div>
             <datalist id="ccOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-update-submit ${c ? "" : "disabled"}>Save Update / บันทึก</button></div>
@@ -825,6 +834,14 @@
       .forEach(u => out.set(u.email.toLowerCase(), { name: u.display_name || u.email, email: u.email.toLowerCase() }));
     return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
+  // CC options grouped by department: People Master by their department, other active users by theirs
+  function ccByDept() {
+    const people = ccOptions().map(o => {
+      const p = activePeople().find(x => (x.email || "").toLowerCase() === o.email), u = (S.db.user_access || []).find(x => (x.email || "").toLowerCase() === o.email);
+      return { name: o.name, email: o.email, department: (p && p.department) || (u && u.department) || "Other" };
+    });
+    return peopleByDept(null, "email", people);
+  }
   const ccChips = () => (S.ccDraft || []).map((r, i) => `<span class="cc-chip" title="${esc(r.email)}">${esc(r.name || r.email)}<button type="button" data-cc-del="${i}" aria-label="Remove">×</button></span>`).join("");
   function addCc(value) {
     const email = String(value || "").trim().replace(/[,;]+$/, "").toLowerCase();
@@ -837,6 +854,7 @@
   function bindCc(root) {
     const input = $("#upCc", root); if (!input) return;
     const draw = () => { $("[data-cc-chips]", root).innerHTML = ccChips(); };
+    $("#upCcPick", root)?.addEventListener("change", e => { if (e.target.value && addCc(e.target.value)) draw(); e.target.value = ""; });
     const take = () => { if (addCc(input.value)) { input.value = ""; draw(); } };
     input.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "," || e.key === ";") { e.preventDefault(); take(); } });
     input.addEventListener("input", e => { if (e.inputType === "insertReplacementText" || ccOptions().some(o => o.email === input.value.trim().toLowerCase())) take(); });

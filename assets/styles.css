@@ -357,3 +357,15 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 .cc-chip button { border: 0; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; color: var(--muted); padding: 0 4px; }
 .cc-input { flex: 1; min-width: 220px; border: 0; outline: none; padding: 4px; font: inherit; }
 .contract-department-group.closed-group td { background: #ECEDE8; border-top: 2px solid #9AA08A; }
+
+/* Dashboard 5. Longest pending on hand: balanced columns */
+.longest-table { table-layout: fixed; width: 100%; min-width: 560px; }
+.longest-table col.c-details { width: 56%; }
+.longest-table col.c-owner { width: 32%; }
+.longest-table col.c-day { width: 12%; }
+.longest-table td { vertical-align: top; overflow-wrap: anywhere; }
+.longest-table th:last-child, .longest-table td:last-child { text-align: center; }
+
+/* CC E-Mail: department picker + typed emails */
+.cc-row { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 8px; align-items: start; }
+@media (max-width: 720px) { .cc-row { grid-template-columns: 1fr; } }
