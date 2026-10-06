@@ -6,8 +6,16 @@
   const KEYS = {
     contracts: "id", contract_logs: "id", departments: "name", people: "name",
     contract_types: "id", action_sla: "action", due_date_requests: "id",
-    user_access: "email", profiles: "id", entra_role_mappings: "claim_value", access_audit: "id"
+    user_access: "email", profiles: "id", entra_role_mappings: "claim_value", access_audit: "id",
+    contract_templates: "id", log_view_columns: "section,key", master_audit: "id"
   };
+  // Loaded when the database has them (005, 007, 008); without them the app keeps working
+  const OPTIONAL = ["contract_templates", "log_view_columns", "master_audit"];
+  // Master tables that remember hand edits (008_master_data.sql): locked rows are skipped by Import
+  const TRACKED = ["departments", "people", "contract_types", "action_sla", "contract_templates", "log_view_columns"];
+  // A row's key as text; "section,key" style keys join their parts
+  const keyOf = (table, r) => KEYS[table].split(",").map(k => String(r[k] ?? "")).join("|");
+  const matchKey = (table, key) => typeof key === "object" ? key : { [KEYS[table]]: key };
   const ROLES = {
     viewer: { level: 1, label: "Viewer", nameEn: "Contract Viewer", nameTh: "ผู้ดูข้อมูลสัญญา" },
     user: { level: 2, label: "User", nameEn: "Contract User", nameTh: "ผู้ดำเนินการสัญญา" },
@@ -28,7 +36,7 @@
     async init() {
       const raw = storage.getItem(this.key);
       this.db = raw ? JSON.parse(raw) : JSON.parse(JSON.stringify(window.SEED_DATA));
-      TABLES.forEach(t => { this.db[t] = this.db[t] || []; });
+      [...TABLES, ...OPTIONAL].forEach(t => { this.db[t] = this.db[t] || []; });
       this.db.contract_logs.forEach((r, i) => { if (r.id == null) r.id = i + 1; });
       this.persist();
     }
@@ -105,7 +113,10 @@
         this.guardAccess(this.db.user_access, () => { this.db.user_access = this.db.user_access.filter(x => x.email !== key); });
         return this.persist();
       }
-      this.db[table] = this.db[table].filter(x => String(x[k]) !== String(key));
+      const m = matchKey(table, key);
+      const gone = this.db[table].filter(x => Object.entries(m).every(([f, v]) => String(x[f]) === String(v)));
+      this.db[table] = this.db[table].filter(x => !gone.includes(x));
+      if (TRACKED.includes(table)) gone.forEach(r => this.audit(table, "delete", r, null));
       if (table === "contracts") {
         this.db.contract_logs = this.db.contract_logs.filter(x => x.contract_id !== key);
         this.db.due_date_requests = this.db.due_date_requests.filter(x => x.contract_id !== key);
@@ -122,12 +133,32 @@
       this.persist();
     }
     applyRows(table, k, rows) {
+      this.db[table] = this.db[table] || [];
       rows.forEach(row => {
-        const r = { ...row };
+        let r = { ...row };
         if (k === "id" && (r.id == null || r.id === "")) r.id = this.nextId(table);
-        const i = this.db[table].findIndex(x => String(x[k]) === String(r[k]));
-        if (i >= 0) this.db[table][i] = { ...this.db[table][i], ...r }; else this.db[table].push(r);
+        const i = this.db[table].findIndex(x => keyOf(table, x) === keyOf(table, r));
+        const old = i >= 0 ? this.db[table][i] : null;
+        r = { ...(old || {}), ...r };
+        if (TRACKED.includes(table)) {
+          // Same rule as master_track() in 008: a hand edit locks the row; changing only the lock keeps it as set
+          const strip = o => { const { locked, edited_by, edited_at, ...rest } = o || {}; return JSON.stringify(rest); };
+          if (old && strip(old) === strip(r)) { if (Boolean(old.locked) === Boolean(r.locked)) return; }
+          else {
+            r.edited_by = this.who(); r.edited_at = new Date().toISOString();
+            if (!old || Boolean(old.locked) === Boolean(r.locked)) r.locked = true;
+          }
+          this.audit(table, old ? "update" : "insert", old, r);
+        }
+        if (i >= 0) this.db[table][i] = r; else this.db[table].push(r);
       });
+    }
+    who() { try { return JSON.parse(storage.getItem(this.sessionKey) || "{}").email || "demo"; } catch (e) { return "demo"; } }
+    audit(table, action, before, after, source = "manual") {
+      this.db.master_audit = this.db.master_audit || [];
+      this.db.master_audit.unshift({ id: this.nextId("master_audit"), table_name: table, row_key: keyOf(table, after || before), action, source,
+        changed_by: this.who(), changed_at: new Date().toISOString(), before, after });
+      this.db.master_audit.length = Math.min(this.db.master_audit.length, 500);
     }
     // Demo stand-in for import_snapshot() in 005_snapshot_import.sql: add or update by key, never delete
     async importSnapshot(data) {
@@ -136,10 +167,12 @@
         contract_types: r => `${r.classification}|${r.type}|${r.sub_type || ""}`, action_sla: r => r.action,
         contract_templates: r => r.selection_label, due_date_requests: r => r.details?.requestId || `${r.contract_id}|${r.requested_due}`
       };
+      let kept = 0;
       Object.entries(keyOf).forEach(([t, key]) => {
         this.db[t] = this.db[t] || [];
         (data[t] || []).forEach(row => {
           const i = this.db[t].findIndex(x => key(x) === key(row));
+          if (i >= 0 && this.db[t][i].locked) { kept++; return; } // edited by hand in Master Data: keep it
           if (i >= 0) { if (t !== "due_date_requests") this.db[t][i] = { ...this.db[t][i], ...row }; }
           else this.db[t].push(t === "contracts" ? { ...row } : { id: this.nextId(t), ...row });
         });
@@ -153,7 +186,7 @@
       });
       this.persist();
       return { imported_contracts: (data.contracts || []).length, imported_logs: (data.contract_logs || []).length,
-        contracts: this.db.contracts.length, contract_logs: this.db.contract_logs.length, new_users: added };
+        contracts: this.db.contracts.length, contract_logs: this.db.contract_logs.length, new_users: added, locked_kept: kept };
     }
     async resetDemo() { storage.removeItem(this.key); await this.init(); }
   }
@@ -237,9 +270,13 @@
         if (error) throw error;
         out[t] = data;
       }));
-      // Log View headers (007_log_view.sql); without that table the app uses its built-in headers
-      const cols = await this.client.from("log_view_columns").select("*");
-      if (!cols.error) out.log_view_columns = cols.data;
+      // Templates (005), Log View headers (007) and master history (008, Level 4+); skipped when the table is missing
+      await Promise.all(OPTIONAL.map(async t => {
+        let q = this.client.from(t).select("*");
+        q = t === "master_audit" ? q.order("changed_at", { ascending: false }).limit(500) : q.limit(10000);
+        const { data, error } = await q;
+        if (!error) out[t] = data;
+      }));
       return out;
     }
     async insert(table, row) {
@@ -255,7 +292,7 @@
       return data;
     }
     async remove(table, key) {
-      const { error } = await this.client.from(table).delete().eq(KEYS[table], key);
+      const { error } = await this.client.from(table).delete().match(matchKey(table, key));
       if (error) throw error;
     }
     // One transaction on the server (005_snapshot_import.sql); Admin only; adds or updates, never deletes

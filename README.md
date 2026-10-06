@@ -40,6 +40,7 @@ supabase/migrations/004_menu_access.sql  สิทธิ์อ่าน Master D
 supabase/migrations/006_root_level.sql  Level 5 Root: แก้ Master Data ได้คนเดียว, ให้/ถอด Level 5 ได้เฉพาะ Root
 supabase/migrations/005_snapshot_import.sql  นำเข้า production_snapshot.json จาก Admin Tools (เพิ่มหรืออัปเดต ไม่ลบ)
 supabase/migrations/007_log_view.sql    Log View: คอลัมน์ครบทุกช่องของ logs.csv และหัวตาราง Log View (log_view_columns)
+supabase/migrations/008_master_data.sql Master Data: Lock แถวที่แก้ไขเอง (Import ไม่เขียนทับ), ประวัติการแก้ไข (master_audit), กันลบแถวที่ยังถูกใช้
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```
 

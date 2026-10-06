@@ -335,3 +335,17 @@ table.grid.compact td { padding: 6px 8px; }
 .reason-label span, .reason-value span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .reason-label { background: none; }
 @media (max-width: 560px) { .reason-row { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Master Data */
+.master-search { width: 180px; }
+.master-show { width: auto; }
+.grid tr.row-changed td { background: #fbf7e4; }
+.grid tr.row-inactive td { color: var(--muted); }
+.grid tr.row-inactive .cell-input { color: var(--muted); }
+.req { color: var(--t23-orange-dark); }
+.master-problems { margin: 0 18px 12px; padding: 10px 14px; border: 1px solid var(--t23-orange-dark); border-radius: 8px; background: #fff6ef; font-size: 13px; }
+.master-problems ul { margin: 6px 0 0; padding-left: 18px; }
+.master-history summary { cursor: pointer; padding: 14px 18px; }
+.master-history .table-wrap { margin: 0 18px 14px; }
+td.center { text-align: center; }
+td.nowrap, th.nowrap { white-space: nowrap; }
