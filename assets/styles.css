@@ -349,3 +349,10 @@ table.grid.compact td { padding: 6px 8px; }
 .master-history .table-wrap { margin: 0 18px 14px; }
 td.center { text-align: center; }
 td.nowrap, th.nowrap { white-space: nowrap; }
+
+/* CC E-Mail */
+.cc-box { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid #DCE2C9; border-radius: 8px; padding: 6px 8px; background: #fff; }
+.cc-box [data-cc-chips] { display: contents; }
+.cc-chip { display: inline-flex; align-items: center; gap: 4px; background: #f1f6dc; border: 1px solid #DCE2C9; border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 12px; }
+.cc-chip button { border: 0; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; color: var(--muted); padding: 0 4px; }
+.cc-input { flex: 1; min-width: 220px; border: 0; outline: none; padding: 4px; font: inherit; }

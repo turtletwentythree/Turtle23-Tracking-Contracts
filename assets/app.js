@@ -39,25 +39,38 @@
   const uniq = arr => Array.from(new Set(arr.filter(v => v !== "" && v != null)));
   const short = v => String(v || "").split(" / ")[0];
 
-  function todayISO() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
+  // Dates are YYYY-MM-DD in Asia/Bangkok, whatever the time zone of the computer
+  const TZ = "Asia/Bangkok";
+  const bkkDate = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+  function todayISO() { return bkkDate.format(new Date()); }
+  function dateOf(ts) { if (!ts) return null; const t = Date.parse(ts); return /^\d{4}-\d{2}-\d{2}$/.test(String(ts)) || isNaN(t) ? String(ts).slice(0, 10) : bkkDate.format(new Date(t)); }
   function parseDate(s) { if (!s) return null; const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return new Date(y, m - 1, d); }
   function iso(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
   function fmtDate(s) {
     const d = parseDate(s); if (!d) return "-";
     return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   }
-  // Working days (Mon–Fri) after `from` up to and including `to`
+  // Working days: Mon–Fri, minus the Holiday Master when the database has one (table holidays, column date).
+  // The start day is not counted: start Monday → Tuesday = 1, Wednesday = 2. Counted on calendar dates (UTC), so no time-zone drift.
+  const utcDay = s => { const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  function holidaySet() {
+    const rows = S.db.holidays || [];
+    if (S._holKey !== rows) { S._holKey = rows; S._hol = new Set(rows.filter(h => h.active !== false).map(h => String(h.date || h.holiday_date || "").slice(0, 10))); }
+    return S._hol;
+  }
+  const isWorkday = t => { const d = new Date(t), w = d.getUTCDay(); return w !== 0 && w !== 6 && !holidaySet().has(d.toISOString().slice(0, 10)); };
   function workdays(from, to) {
-    const a = parseDate(from), b = parseDate(to);
-    if (!a || !b || b <= a) return 0;
-    let n = 0; const d = new Date(a);
-    while (d < b) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) n++; }
+    if (!from || !to) return 0;
+    const a = utcDay(from), b = utcDay(to);
+    if (!(b > a)) return 0;
+    let n = 0;
+    for (let t = a + 864e5; t <= b; t += 864e5) if (isWorkday(t)) n++;
     return n;
   }
   function addWorkdays(from, days) {
-    const d = parseDate(from) || new Date(); let n = 0;
-    while (n < days) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) n++; }
-    return iso(d);
+    let t = utcDay(from || todayISO()), n = 0;
+    while (n < days) { t += 864e5; if (isWorkday(t)) n++; }
+    return new Date(t).toISOString().slice(0, 10);
   }
 
   function toast(msg, err = false) {
@@ -83,23 +96,83 @@
   }
 
   // ───────────── Derived contract metrics ─────────────
-  function metrics(c) {
-    const asOf = c.status !== "Open" && c.closed_at ? c.closed_at : todayISO();
-    const used = workdays(c.add_case_date, asOf);
-    const onHand = c.status === "Open" ? workdays(c.station_in || c.add_case_date, asOf) : 0;
-    const sla = Number(c.total_sla) || 0;
-    const balance = sla - used;
-    let code = "G";
-    if (c.status === "Closed") code = "C";
-    else if (c.status === "Cancelled") code = "X";
-    else if (c.due_date && todayISO() > c.due_date) code = "R";
-    else if (balance < 0) code = "R";
-    else if (balance <= Math.max(2, Math.round(sla * 0.2))) code = "Y";
-    return { used, onHand, balance, code };
-  }
-  const STATUS_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=Overdue", C: "Completed", X: "Cancelled" };
-  const STATUS_TAG = { G: "tag-green", Y: "tag-amber", R: "tag-red", C: "tag-dark", X: "tag-grey" };
+  // ───────────── SLA engine (spec 2026-10-06) ─────────────
+  // Two separate clocks, never mixed:
+  //  - Alert         = Days on Hand (working days in the current Action) vs Action SLA (Action SLA Master)
+  //  - Status Update = Accumulated Days (working days since Add Case Date) vs Total SLA (Type of Contract Master)
+  // The real state is the Latest Action of the newest log; Contract Stage is used only when there is no log.
+  const CLOSED_ACTION = /^(signed|signed\s*\/\s*completed|completed)$/i;
+  const CANCELLED_ACTION = /^cancel/i;
+  const FORWARD_ACTION = /^forward$/i;
+  const NOT_AN_ACTION = /^due date /i; // Due Date request/approval notes do not change the station
+  const STATUS_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=Overdue", C: "B=Completed", X: "B=Cancelled", N: "Configuration Required" };
+  const STATUS_TAG = { G: "tag-green", Y: "tag-amber", R: "tag-red", C: "tag-dark", X: "tag-dark", N: "tag-grey" };
+  const ALERT_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=At Risk", U: "U=Uncontrol", C: "B=Completed", X: "B=Cancelled", N: "Configuration Required" };
+  const ALERT_TAG = { ...STATUS_TAG, U: "tag-grey" };
   const statusTag = code => `<span class="tag status-dot ${STATUS_TAG[code]}">${STATUS_LABEL[code]}</span>`;
+  const alertTag = code => `<span class="tag status-dot ${ALERT_TAG[code]}">${ALERT_LABEL[code]}</span>`;
+
+  function logsOf(id) { return S.db.contract_logs.filter(l => l.contract_id === id).sort((a, b) => a.log_no - b.log_no); }
+  // Newest log: Updated Date and Time, then Log No, then the order in the database
+  function newer(a, b) {
+    const ta = Date.parse(a.updated_at) || 0, tb = Date.parse(b.updated_at) || 0;
+    if (ta !== tb) return ta > tb;
+    if ((a.log_no || 0) !== (b.log_no || 0)) return (a.log_no || 0) > (b.log_no || 0);
+    return (Number(a.id) || 0) > (Number(b.id) || 0);
+  }
+  function latestLog(id) {
+    let last = null;
+    S.db.contract_logs.forEach(l => { if (l.contract_id === id && !NOT_AN_ACTION.test(l.action || "") && (!last || newer(l, last))) last = l; });
+    return last;
+  }
+
+  // Missing settings are reported once in the console, never treated as 0
+  const configWarned = new Set();
+  function configMissing(what) { if (!configWarned.has(what)) { configWarned.add(what); console.warn(`[SLA] Configuration Required: ${what}`); } }
+  function actionSla(action) {
+    const a = String(action || "").trim().toLowerCase();
+    const row = (S.db.action_sla || []).find(r => String(r.action || "").trim().toLowerCase() === a);
+    const n = row && row.sla !== "" && row.sla != null ? Number(row.sla) : NaN;
+    if (!Number.isFinite(n)) { configMissing(`Action SLA for "${action}"`); return null; }
+    return n;
+  }
+  // Total SLA: Classification + Type of Contract + Sub Type in the Type of Contract Master (Classification must match too);
+  // when the master has no matching row, the Total SLA saved on the contract at Add Case
+  function totalSla(c) {
+    const cls = short(c.classification || (c.access_level === "Confidential" ? "Confidential" : "Day-to-day Work")).toLowerCase();
+    const rows = (S.db.contract_types || []).filter(t => short(t.classification).toLowerCase() === cls && short(t.type).toLowerCase() === short(c.type).toLowerCase());
+    const sub = short(c.sub_type).toLowerCase();
+    const row = rows.find(t => sub && short(t.sub_type).toLowerCase() === sub) || rows.find(t => !t.sub_type);
+    const n = row && row.sla != null && row.sla !== "" ? Number(row.sla) : c.total_sla != null && c.total_sla !== "" ? Number(c.total_sla) : NaN;
+    if (!Number.isFinite(n) || n <= 0) { configMissing(`Total SLA for ${c.id}`); return null; }
+    return n;
+  }
+
+  function contractState(c, today = todayISO()) {
+    const log = latestLog(c.id);
+    const action = (log && log.action) || c.stage || "";
+    const kind = CLOSED_ACTION.test(action) ? "completed" : CANCELLED_ACTION.test(action) ? "cancelled" : "open";
+    const closeDate = kind === "open" ? null : (log ? log.in_date || dateOf(log.updated_at) : null) || c.closed_at || today;
+    const end = closeDate || today;
+    // Status Update: Accumulated Days vs Total SLA
+    const acc = workdays(c.add_case_date, end);
+    const sla = totalSla(c);
+    const code = kind === "completed" ? "C" : kind === "cancelled" ? "X" : sla == null ? "N" : acc < sla ? "G" : acc < sla + 5 ? "Y" : "R";
+    // Alert: Days on Hand of the current Action vs Action SLA
+    const forward = kind === "open" && FORWARD_ACTION.test(action);
+    const inDate = (log && log.in_date) || c.station_in || null;
+    const onHand = forward || !inDate ? null : workdays(inDate, kind !== "open" ? end : (log && log.out_date) || today);
+    const aSla = kind === "open" && !forward ? actionSla(action) : null;
+    const alert = kind === "completed" ? "C" : kind === "cancelled" ? "X" : forward ? "U" : aSla == null || onHand == null ? "N"
+      : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
+    return { c, log, action, reason: (log && log.reason) || "", kind, closeDate, acc, used: acc, totalSla: sla, balance: sla == null ? null : sla - acc,
+      code, onHand, actionSla: aSla, alert };
+  }
+  const metrics = c => contractState(c);
+  const isOpen = c => contractState(c).kind === "open";
+  const dayText = v => v == null ? "-" : v;
+  // Read-only access for checks in the browser console (e.g. ContractSLA.state("CT-N-ADMIN-001"))
+  window.ContractSLA = { workdays, addWorkdays, todayISO, state: (id, today) => { const c = S.db.contracts.find(x => x.id === id); return c ? contractState(c, today) : null; } };
 
   function visibleContracts() {
     return S.db.contracts.filter(c => c.access_level !== "Confidential" || can(3));
@@ -108,8 +181,6 @@
     if (view === "confidential") return S.db.contracts.filter(c => c.access_level === "Confidential" && can(3));
     return S.db.contracts.filter(c => c.access_level !== "Confidential");
   }
-  function logsOf(id) { return S.db.contract_logs.filter(l => l.contract_id === id).sort((a, b) => a.log_no - b.log_no); }
-  function latestLog(id) { const l = logsOf(id); return l[l.length - 1]; }
   function activeTypes() { return S.db.contract_types.filter(t => t.active !== false); }
   function activePeople(dept) { return S.db.people.filter(p => p.active !== false && (!dept || p.department === dept)); }
 
@@ -232,31 +303,11 @@
   //  - real state = Latest Action from the contract's log, Contract Stage only when there is no log
   //  - Accumulated Days = working days (Mon–Fri) after Add Case Date up to today, or up to the Close Date once closed
   //  - Status Update from Accumulated Days vs Total SLA only: < SLA = G, < SLA + 5 = Y, otherwise R; closed = B
-  const CLOSED_ACTION = /signed\s*\/\s*completed|^completed$/i;
-  const CANCELLED_ACTION = /cancel/i;
-  const DASH_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=Overdue", BC: "B=Completed", BX: "B=Cancelled" };
-  const DASH_TAG = { G: "tag-green", Y: "tag-amber", R: "tag-red", BC: "tag-dark", BX: "tag-grey" };
+  //  - Status Update and Alert come from contractState() (SLA engine above), the same values as the Contracts page
+  const DASH_LABEL = STATUS_LABEL;
+  const DASH_TAG = STATUS_TAG;
   const isConfidential = c => c.access_level === "Confidential" || /^confidential/i.test(String(c.classification || ""));
-
-  function lastLogOf(id) {
-    let last = null;
-    S.db.contract_logs.forEach(l => {
-      if (l.contract_id !== id) return;
-      if (!last || l.log_no > last.log_no || (l.log_no === last.log_no && String(l.updated_at) > String(last.updated_at))) last = l;
-    });
-    return last;
-  }
-  function dashState(c, today) {
-    const log = lastLogOf(c.id);
-    const action = (log && log.action) || c.stage || "";
-    const kind = CLOSED_ACTION.test(action) ? "completed" : CANCELLED_ACTION.test(action) ? "cancelled" : "open";
-    const closeDate = kind === "open" ? null
-      : (log ? (log.in_date || String(log.updated_at || "").slice(0, 10)) : null) || c.closed_at || today;
-    const acc = workdays(c.add_case_date, closeDate || today);
-    const sla = Number(c.total_sla) || 0;
-    const code = kind === "completed" ? "BC" : kind === "cancelled" ? "BX" : acc < sla ? "G" : acc < sla + 5 ? "Y" : "R";
-    return { c, log, action, reason: (log && log.reason) || "", kind, closeDate, acc, code };
-  }
+  const dashState = (c, today) => contractState(c, today);
   // Level 1-2: Day-to-day Work only · Level 3: Day-to-day Work + Confidential · Level 4: everything
   function dashboardContracts() {
     return S.db.contracts.filter(c => level() >= 4 || (level() >= 3 ? true : !isConfidential(c)));
@@ -265,7 +316,8 @@
   function renderDashboard() {
     const today = todayISO();
     const scope = dashboardContracts();
-    const rows = scope.filter(c =>
+    const seen = new Set();
+    const rows = scope.filter(c => !seen.has(c.id) && seen.add(c.id)).filter(c =>
       (!S.dash.department || c.department === S.dash.department) &&
       (!S.dash.classification || (isConfidential(c) ? "Confidential" : "Day-to-day Work") === S.dash.classification))
       .map(c => dashState(c, today));
@@ -276,8 +328,9 @@
     const overdue = open.filter(x => x.code === "R").sort((a, b) => b.acc - a.acc || a.c.id.localeCompare(b.c.id));
 
     const depts = uniq(scope.map(c => c.department)).sort();
+    // Widget 6: every contract the user may see (open and completed; cancelled is left out), days stop at the Close Date
     const byDept = {};
-    open.forEach(x => { const d = x.c.department || "-"; (byDept[d] = byDept[d] || []).push(x.acc); });
+    rows.filter(x => x.kind !== "cancelled").forEach(x => { const d = x.c.department || "-"; (byDept[d] = byDept[d] || []).push(x.acc); });
     const avgRows = Object.entries(byDept).map(([d, a]) => [d, a.reduce((s, v) => s + v, 0) / a.length]).sort((a, b) => b[1] - a[1]);
     const late = open.filter(x => x.code === "Y" || x.code === "R");
 
@@ -314,7 +367,7 @@
           <div class="panel-body" style="padding-top:12px;text-align:right"><span class="tag tag-red">R = Overdue</span> <span class="small muted">${overdue.length} Contracts</span></div>
         </section>
         <section class="panel">
-          <div class="panel-head"><div><h2>6. Avg Spending Time at Station by Dept</h2><p>Department · Average accumulated working days (open contracts)</p></div></div>
+          <div class="panel-head"><div><h2>6. Avg Spending Time at Station by Dept</h2><p>Department · Average accumulated working days (all contracts you can see, open and completed)</p></div></div>
           <div class="table-wrap"><table class="grid compact" data-widget="dept-avg">
             <thead><tr><th>Department / Restaurant</th><th class="num">Avg. Days</th></tr></thead>
             <tbody>${avgRows.map(([d, a]) => `<tr><td><b>${esc(d)}</b></td><td class="num"><b>${Math.round(a * 10) / 10}</b> D</td></tr>`).join("") || `<tr><td colspan="2" class="empty">-</td></tr>`}</tbody>
@@ -330,7 +383,10 @@
   function barPanel(title, id, late, keyFn, withActions) {
     const groups = {};
     late.forEach(x => { const k = keyFn(x) || "-"; (groups[k] = groups[k] || []).push(x); });
-    const rows = Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    // Delayed + Overdue first, then more Overdue, then (By Person) more Delayed, then the name
+    const cnt = (items, code) => items.filter(x => x.code === code).length;
+    const rows = Object.entries(groups).sort((a, b) => b[1].length - a[1].length || cnt(b[1], "R") - cnt(a[1], "R")
+      || (withActions ? cnt(b[1], "Y") - cnt(a[1], "Y") : 0) || a[0].localeCompare(b[0]));
     const max = Math.max(1, ...rows.map(r => r[1].length));
     return `<section class="panel" data-widget="${id}"><div class="panel-head"><div><h2>${esc(title)}</h2><p>เฉพาะสัญญาที่ยังเปิดและเป็น Y=Delayed หรือ R=Overdue</p></div></div>
       <div class="panel-body"><div class="bar-list">${rows.map(([k, items]) => {
@@ -493,13 +549,20 @@
     return `<span class="tag status-dot ${code}">${esc(t.split(">>").pop().trim())}</span>`;
   }
   const logRoute = l => `From ${l.from_person || "-"} / To ${l.to_person || "-"}`;
+  // The current Action of an open contract shows live Days on Hand and Alert; earlier logs keep their saved values
+  function liveLog(l) {
+    if (l.out_date) return null;
+    const c = S.db.contracts.find(x => x.id === l.contract_id); if (!c) return null;
+    const st = contractState(c);
+    return st.kind === "open" && st.log === l ? st : null;
+  }
   function logCell(l, key) {
     switch (key) {
       case "contract_id": return `<span class="log-cid">${esc(l.contract_id)}</span>`;
       case "log_view": return `<span class="log-route">${esc(logRoute(l))}</span>`;
       case "in_date": case "out_date": return l[key] ? fmtDate(l[key]) : "";
-      case "days_on_hand": { const v = lf(l, key); return esc(v !== "" ? v : workdays(l.in_date, l.out_date || todayISO())); }
-      case "alert": return alertBadge(lf(l, "alert"));
+      case "days_on_hand": { const st = liveLog(l); if (st) return dayText(st.onHand); const v = lf(l, key); return esc(v !== "" && v != null ? v : workdays(l.in_date, l.out_date || todayISO())); }
+      case "alert": { const st = liveLog(l); return st ? alertTag(st.alert) : alertBadge(lf(l, "alert")); }
       case "delay_reason": return esc(lf(l, key) || "-");
       case "action": return `<button class="log-action-btn" data-log-action="${esc(l.contract_id)}#${esc(l.log_no)}" title="View reason / ดูเหตุผล">${esc(lf(l, "action_name_en") || l.action || "-")}</button>`;
       default: { const v = lf(l, key); return esc(typeof v === "object" ? JSON.stringify(v) : v); }
@@ -509,7 +572,7 @@
     const fmtDT = v => { const d = new Date(v); return isNaN(d) ? String(v || "") : d.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }); };
     switch (key) {
       case "action": return [lf(l, "action_name_en") || l.action, lf(l, "action_name_th")];
-      case "alert": return [String(lf(l, "alert")).split(">>").pop().trim()];
+      case "alert": { const st = liveLog(l); return [st ? ALERT_LABEL[st.alert] : String(lf(l, "alert")).split(">>").pop().trim()]; }
       case "status_update": return [c ? CONTRACT_STATUS_LABEL[metrics(c).code] : ""];
       case "description": return [lf(l, "action_description_en"), lf(l, "action_description_th")];
       case "reason_type": return [lf(l, "action_reason_type_en") || lf(l, "action_reason_type"), lf(l, "action_reason_type_th")];
@@ -581,15 +644,16 @@
     $("#drawerRoot").innerHTML = `<div class="drawer-backdrop" data-close-drawer>
       <aside class="drawer" role="dialog" aria-label="${esc(c.id)}">
         <div class="drawer-head"><div><span class="muted small">${esc(c.access_level === "Confidential" ? "Confidential Contract" : "Day-to-day Work")}</span>
-          <h2>${esc(c.id)} · ${esc(c.name)}</h2><div style="margin-top:6px">${statusTag(m.code)} <span class="tag tag-grey">${esc(c.stage)}</span></div></div>
+          <h2>${esc(c.id)} · ${esc(c.name)}</h2><div style="margin-top:6px">${statusTag(m.code)} ${alertTag(m.alert)} <span class="tag tag-grey">${esc(m.action || c.stage)}</span></div></div>
           <button class="icon-button" data-close-drawer aria-label="Close">✕</button></div>
         <div class="drawer-body">
           <div class="kv-grid">
             ${kv("Department", esc(c.department))}${kv("Contract Owner", esc(c.owner))}${kv("Station Owner", esc(c.station_to || "-"))}
             ${kv("Type of Contract", esc(c.type))}${kv("Sub Type / Work Type", esc(c.sub_type || "-"))}${kv("Vendor / Counter party", esc(c.vendor || "-"))}
             ${kv("Add Case Date", fmtDate(c.add_case_date))}${kv("Due Date", fmtDate(c.due_date))}${kv("System Due", fmtDate(c.system_due))}
-            ${kv("Total SLA", `${c.total_sla ?? "-"} วันทำการ`)}${kv("Days Used", m.used)}${kv("Days on Hand", m.onHand)}
-            ${kv("Balance", `<span style="color:${m.balance < 0 ? "var(--red)" : "inherit"}">${m.balance}</span>`)}${kv("Cycle / Returns", `${c.cycle} / ${c.returns}`)}${kv("Closed", c.closed_at ? `${fmtDate(c.closed_at)} · ${esc(c.close_reason || "")}` : "-")}
+            ${kv("Total SLA", m.totalSla == null ? "Configuration Required" : `${m.totalSla} วันทำการ`)}${kv("Accumulated Days", m.acc)}
+            ${kv("Days on Hand", dayText(m.onHand))}${kv("Action SLA", m.actionSla == null ? (m.alert === "N" ? "Configuration Required" : "-") : `${m.actionSla} วันทำการ`)}
+            ${kv("Balance", m.balance == null ? "-" : `<span style="color:${m.balance < 0 ? "var(--red)" : "inherit"}">${m.balance}</span>`)}${kv("Cycle / Returns", `${c.cycle} / ${c.returns}`)}${kv("Closed", c.closed_at ? `${fmtDate(c.closed_at)} · ${esc(c.close_reason || "")}` : "-")}
           </div>
           ${c.remark ? `<div><p class="section-title">Remark</p><div class="current-card small">${esc(c.remark)}</div></div>` : ""}
           <div><p class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">Log View · ประวัติการดำเนินการ (${logs.length})<button class="btn" data-log-view="${esc(c.id)}">Log View Detail</button></p>
@@ -599,7 +663,7 @@
               ${l.reason ? `<div class="small">${esc(l.reason)}</div>` : ""}${logFiles(l)}</div>`).join("") || `<div class="muted">No log</div>`}</div></div>
           ${reqs.length ? `<div><p class="section-title">Due Date Requests</p><table class="grid compact"><thead><tr><th>Requested</th><th>Reason</th><th>Status</th></tr></thead><tbody>
             ${reqs.map(r => `<tr><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-          ${can(2) && c.status === "Open" ? `<div class="form-actions"><button class="btn" data-goto-step="update" data-cid="${esc(c.id)}">Update Status</button>
+          ${can(2) && m.kind === "open" ? `<div class="form-actions"><button class="btn" data-goto-step="update" data-cid="${esc(c.id)}">Update Status</button>
             <button class="btn" data-goto-step="due" data-cid="${esc(c.id)}">Request Due Date</button><button class="btn btn-primary" data-goto-step="close" data-cid="${esc(c.id)}">Close Case</button></div>` : ""}
         </div></aside></div>`;
     $$("[data-close-drawer]", $("#drawerRoot")).forEach(el => el.addEventListener("click", e => { if (e.target === el) closeDrawer(); }));
@@ -715,7 +779,7 @@
   }
 
   function contractPicker(attr) {
-    const open = visibleContracts().filter(c => c.status === "Open");
+    const open = visibleContracts().filter(isOpen);
     const sel = S.selectedContract;
     return `<select class="select" data-pick="${attr}"><option value="">เลือกสัญญา / Select contract</option>
       ${open.map(c => `<option value="${esc(c.id)}" ${sel === c.id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name)}</option>`).join("")}</select>`;
@@ -723,12 +787,12 @@
   function currentCard(c) {
     if (!c) return `<div class="current-card muted small">ยังไม่ได้เลือกสัญญา</div>`;
     const m = metrics(c);
-    return `<div class="current-card"><b>${esc(c.id)} · ${esc(c.name)}</b> ${statusTag(m.code)}
-      <div class="small muted" style="margin-top:4px">Stage: <b>${esc(c.stage)}</b> · Station: ${esc(c.station_from || "-")} → <b>${esc(c.station_to || "-")}</b> · Due ${fmtDate(c.due_date)} · Days on hand ${m.onHand} · Cycle ${c.cycle} · Returns ${c.returns}</div></div>`;
+    return `<div class="current-card"><b>${esc(c.id)} · ${esc(c.name)}</b> ${statusTag(m.code)} ${alertTag(m.alert)}
+      <div class="small muted" style="margin-top:4px">Latest Action: <b>${esc(m.action || "-")}</b> · Station: ${esc(c.station_from || "-")} → <b>${esc(c.station_to || "-")}</b> · Due ${fmtDate(c.due_date)} · Days on hand ${dayText(m.onHand)} · Accumulated ${m.acc} · Cycle ${c.cycle} · Returns ${c.returns}</div></div>`;
   }
 
   function renderUpdateCase() {
-    const c = S.db.contracts.find(x => x.id === S.selectedContract && x.status === "Open");
+    const c = S.db.contracts.find(x => x.id === S.selectedContract && isOpen(x));
     const acts = S.db.action_sla.filter(a => a.active !== false);
     return `<section class="panel form-panel"><div class="panel-head"><div><h2 style="font-size:20px">Update Status</h2><p>อัปเดตสถานะ · ส่งต่อสัญญาไปยังผู้รับผิดชอบลำดับถัดไป</p></div></div>
       <div class="panel-body" style="display:grid;gap:14px">
@@ -741,35 +805,77 @@
             ${activePeople().map(p => `<option ${c && c.owner === p.name ? "" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
           <div class="field"><label>Date / วันที่</label><input class="input" type="date" id="upDate" value="${todayISO()}"></div>
           <div class="field full"><label>Reason / เหตุผล</label><textarea class="input" rows="2" id="upReason" placeholder="รายละเอียดการดำเนินการ"></textarea></div>
+          <div class="field full"><label>CC E-Mail / สำเนาถึง</label>
+            <div class="cc-box"><span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="เลือกจากรายชื่อ หรือพิมพ์อีเมลแล้วกด Enter"></div>
+            <datalist id="ccOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-update-submit ${c ? "" : "disabled"}>Save Update / บันทึก</button></div>
       </div></section>`;
+  }
+
+  // CC E-Mail: emails from People Master plus active users, and any other email typed in
+  function ccOptions() {
+    const out = new Map();
+    activePeople().filter(p => p.email).forEach(p => out.set(p.email.toLowerCase(), { name: p.name, email: p.email.toLowerCase() }));
+    (S.db.user_access || []).filter(u => u.active !== false && u.email && !out.has(u.email.toLowerCase()))
+      .forEach(u => out.set(u.email.toLowerCase(), { name: u.display_name || u.email, email: u.email.toLowerCase() }));
+    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const ccChips = () => (S.ccDraft || []).map((r, i) => `<span class="cc-chip" title="${esc(r.email)}">${esc(r.name || r.email)}<button type="button" data-cc-del="${i}" aria-label="Remove">×</button></span>`).join("");
+  function addCc(value) {
+    const email = String(value || "").trim().replace(/[,;]+$/, "").toLowerCase();
+    if (!email) return false;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast("อีเมลไม่ถูกต้อง", true); return false; }
+    S.ccDraft = S.ccDraft || [];
+    if (!S.ccDraft.some(r => r.email === email)) S.ccDraft.push(ccOptions().find(o => o.email === email) || { name: email, email });
+    return true;
+  }
+  function bindCc(root) {
+    const input = $("#upCc", root); if (!input) return;
+    const draw = () => { $("[data-cc-chips]", root).innerHTML = ccChips(); };
+    const take = () => { if (addCc(input.value)) { input.value = ""; draw(); } };
+    input.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "," || e.key === ";") { e.preventDefault(); take(); } });
+    input.addEventListener("input", e => { if (e.inputType === "insertReplacementText" || ccOptions().some(o => o.email === input.value.trim().toLowerCase())) take(); });
+    input.addEventListener("blur", () => { if (input.value.trim()) take(); });
+    $("[data-cc-chips]", root).addEventListener("click", e => {
+      const b = e.target.closest("[data-cc-del]"); if (!b) return;
+      S.ccDraft.splice(Number(b.dataset.ccDel), 1); draw();
+    });
   }
 
   async function submitUpdate() {
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const action = $("#upAction").value, to = $("#upTo").value, date = $("#upDate").value || todayISO(), reason = $("#upReason").value.trim();
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
-    const act = S.db.action_sla.find(a => a.action === action);
-    const logs = logsOf(c.id); const last = logs[logs.length - 1];
+    if (S.ccDraft === undefined) S.ccDraft = [];
+    if ($("#upCc")?.value.trim() && !addCc($("#upCc").value)) return;
+    const last = latestLog(c.id);
+    const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const cycle = c.cycle + (action === "Resubmit" ? 1 : 0);
     const returns = c.returns + (action === "Return" ? 1 : 0);
     const who = S.user.display_name || S.user.username;
+    // The new Action starts today: Days on Hand 0, Alert from the Action SLA Master (Forward = U=Uncontrol)
+    const forward = FORWARD_ACTION.test(action), aSla = forward ? null : actionSla(action);
+    const onHand = forward ? null : workdays(date, todayISO());
+    const alert = forward ? "U" : aSla == null ? "N" : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
+    const cc = (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
     await guard(async () => {
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
       await window.Store.insert("contract_logs", {
-        contract_id: c.id, log_no: (last?.log_no || 0) + 1, cycle, action, from_person: c.station_to || c.owner, to_person: to,
-        in_date: date, sla: act?.sla ?? null, reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
+        contract_id: c.id, log_no: logNo, cycle, action, from_person: c.station_to || c.owner, to_person: to,
+        in_date: date, sla: aSla, action_sla: aSla, days_on_hand: onHand, alert: ALERT_LABEL[alert], cc_recipients: cc,
+        reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
       await window.Store.update("contracts", c.id, {
         stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: c.station_to || c.owner, station_to: to, station_in: date
       });
+      S.ccDraft = [];
       await reload(); render();
     }, `อัปเดต ${c.id} แล้ว`);
   }
 
   function renderCloseCase() {
-    const c = S.db.contracts.find(x => x.id === S.selectedContract && x.status === "Open");
+    const c = S.db.contracts.find(x => x.id === S.selectedContract && isOpen(x));
     return `<section class="panel form-panel"><div class="panel-head"><div><h2 style="font-size:20px">Close Case</h2><p>ปิดงานเมื่อสัญญาเสร็จสมบูรณ์ หรือยกเลิกเคส</p></div></div>
       <div class="panel-body" style="display:grid;gap:14px">
         <div class="form-grid"><div class="field full"><label>Contract <span class="req">*</span></label>${contractPicker("close")}</div></div>
@@ -788,12 +894,14 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     if (!c) return toast("กรุณาเลือกสัญญา", true);
     const result = $("#clResult").value, date = $("#clDate").value || todayISO(), note = $("#clNote").value.trim();
-    const logs = logsOf(c.id); const last = logs[logs.length - 1];
+    const last = latestLog(c.id);
+    const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const who = S.user.display_name || S.user.username;
     await guard(async () => {
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
       await window.Store.insert("contract_logs", {
-        contract_id: c.id, log_no: (last?.log_no || 0) + 1, cycle: c.cycle, action: result === "Closed" ? "Completed" : "Cancelled",
+        contract_id: c.id, log_no: logNo, cycle: c.cycle, action: result === "Closed" ? "Completed" : "Cancelled",
+        alert: result === "Closed" ? "B=Completed" : "B=Cancelled", days_on_hand: 0,
         from_person: c.station_to, to_person: c.owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
       await window.Store.update("contracts", c.id, { status: result, stage: result === "Closed" ? "Completed" : "Cancelled", closed_at: date, close_reason: note || (result === "Closed" ? "Completed" : "Cancelled") });
@@ -803,7 +911,7 @@
   }
 
   function renderDueCase() {
-    const c = S.db.contracts.find(x => x.id === S.selectedContract && x.status === "Open");
+    const c = S.db.contracts.find(x => x.id === S.selectedContract && isOpen(x));
     const mine = S.db.due_date_requests.filter(r => visibleContracts().some(v => v.id === r.contract_id)).sort((a, b) => b.id - a.id).slice(0, 10);
     return `<section class="panel form-panel"><div class="panel-head"><div><h2 style="font-size:20px">Request Due Date</h2><p>ขอขยายวันครบกำหนด ส่งให้ Admin อนุมัติ</p></div></div>
       <div class="panel-body" style="display:grid;gap:14px">
@@ -1071,7 +1179,7 @@
     const reqs = S.db.due_date_requests;
     const pending = reqs.filter(r => r.status === "Pending");
     const history = reqs.filter(r => r.status !== "Pending").sort((a, b) => String(b.decided_at).localeCompare(String(a.decided_at)));
-    const alerts = visibleContracts().filter(c => c.status === "Open").map(c => ({ c, m: metrics(c) })).filter(x => x.m.code === "R" || x.m.code === "Y");
+    const alerts = visibleContracts().map(c => ({ c, m: metrics(c) })).filter(x => x.m.kind === "open" && (x.m.code === "R" || x.m.code === "Y"));
     const msg = ({ c, m }) => `[${m.code}] Contract Status Update: ${m.code === "R" ? "Overdue" : "Delayed"}\nสถานะสัญญา: ${m.code === "R" ? "เกิน SLA รวม" : "ใกล้ครบ SLA"}\n\nContract ID: ${c.id}\nContract Name: ${c.name}\nContract Owner: ${c.owner}\nStation Owner: ${c.station_to}\nDue Date: ${fmtDate(c.due_date)}\n\nPlease update the action plan immediately. / กรุณาอัปเดตแผนดำเนินการทันที`;
     return `<section class="panel"><div class="panel-head"><div><h2>Admin Tools <span class="tag tag-dark">Admin Only</span></h2><p>เครื่องมือสำหรับผู้ดูแลระบบ</p></div>
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
@@ -1230,6 +1338,7 @@
     $("[data-add-submit]", root)?.addEventListener("click", submitAddCase);
     $$("[data-pick]", root).forEach(s => s.addEventListener("change", () => { S.selectedContract = s.value; render(); }));
     $("[data-update-submit]", root)?.addEventListener("click", submitUpdate);
+    bindCc(root);
     $("[data-close-submit]", root)?.addEventListener("click", submitClose);
     $("[data-due-submit]", root)?.addEventListener("click", submitDue);
     // master
