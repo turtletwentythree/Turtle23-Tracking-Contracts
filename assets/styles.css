@@ -356,3 +356,4 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 .cc-chip { display: inline-flex; align-items: center; gap: 4px; background: #f1f6dc; border: 1px solid #DCE2C9; border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 12px; }
 .cc-chip button { border: 0; background: transparent; cursor: pointer; font-size: 14px; line-height: 1; color: var(--muted); padding: 0 4px; }
 .cc-input { flex: 1; min-width: 220px; border: 0; outline: none; padding: 4px; font: inherit; }
+.contract-department-group.closed-group td { background: #ECEDE8; border-top: 2px solid #9AA08A; }

@@ -282,7 +282,8 @@
   }
 
   function renderNav() {
-    const counts = { contracts: contractsFor("contracts").length, confidential: contractsFor("confidential").length };
+    // Sidebar counts open contracts only; Completed and Cancelled are listed at the bottom of the page
+    const counts = { contracts: contractsFor("contracts").filter(isOpen).length, confidential: contractsFor("confidential").filter(isOpen).length };
     $("#nav").innerHTML = VIEWS.filter(v => can(v.min)).map(v => `
       <button class="nav-button ${S.view === v.id ? "active" : ""}" data-view="${v.id}" title="${esc(v.label)}">
         <span class="nav-icon">${v.icon}</span><span class="nav-label">${esc(v.label)}</span>
@@ -426,6 +427,7 @@
     return c[k] ?? "";
   }
 
+  const SECTION_ORDER = { open: 0, completed: 1, cancelled: 2 };
   function renderContracts(view) {
     if (view === "confidential" && !can(3)) return lockedPanel("Confidential access required", "ต้องมีสิทธิ์ระดับ Confidential ขึ้นไป");
     const f = S.filters[view] = S.filters[view] || {};
@@ -435,9 +437,11 @@
       CONTRACT_COLS.every(col => col.dateRange || !f[col.k] || String(cellValue(c, m, col.k)) === f[col.k]) &&
       (!f.dueFrom || (c.due_date || "") >= f.dueFrom) && (!f.dueTo || (c.due_date && c.due_date <= f.dueTo)) &&
       (!q || [c.id, c.name, c.vendor, c.owner, c.department, c.remark].join(" ").toLowerCase().includes(q)))
-      .sort((a, b) => (a.c.department || "Unassigned").localeCompare(b.c.department || "Unassigned") || a.c.id.localeCompare(b.c.id));
+      // Open contracts by department first, then B=Completed and B=Cancelled as their own sections at the bottom
+      .sort((a, b) => SECTION_ORDER[a.m.kind] - SECTION_ORDER[b.m.kind] || (a.c.department || "Unassigned").localeCompare(b.c.department || "Unassigned") || a.c.id.localeCompare(b.c.id));
+    const groupOf = ({ c, m }) => m.kind === "completed" ? "B=Completed" : m.kind === "cancelled" ? "B=Cancelled" : c.department || "Unassigned";
     const deptCount = {};
-    shown.forEach(({ c }) => { const d = c.department || "Unassigned"; deptCount[d] = (deptCount[d] || 0) + 1; });
+    shown.forEach(x => { const d = groupOf(x); deptCount[d] = (deptCount[d] || 0) + 1; });
     const head = col => {
       if (col.dateRange) return `<th class="filter-th"><details data-filter-menu><summary class="${f.dueFrom || f.dueTo ? "on" : ""}">${esc(col.label)}</summary>
         <div class="th-filter-popover"><label class="range-row"><span>From / จากวันที่</span><input class="input" type="date" data-due-range="dueFrom" data-view-name="${view}" value="${esc(f.dueFrom || "")}"></label>
@@ -451,8 +455,8 @@
     };
     let prevDept = null;
     const body = shown.map(({ c, m }) => {
-      const dept = c.department || "Unassigned";
-      const group = dept !== prevDept ? `<tr class="contract-department-group"><td colspan="${CONTRACT_COLS.length}"><strong>${esc(dept)}</strong><span>${deptCount[dept]} contract(s)</span></td></tr>` : "";
+      const dept = groupOf({ c, m });
+      const group = dept !== prevDept ? `<tr class="contract-department-group${m.kind !== "open" ? " closed-group" : ""}"><td colspan="${CONTRACT_COLS.length}"><strong>${esc(dept)}</strong><span>${deptCount[dept]} contract(s)</span></td></tr>` : "";
       prevDept = dept;
       return `${group}<tr>${CONTRACT_COLS.map(col => {
         const v = cellValue(c, m, col.k);
