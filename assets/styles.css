@@ -59,6 +59,7 @@ body:not(.auth-ready) .app-shell { display: none; }
 .login-error.show { display: block; }
 .ms-form { display: grid; gap: 8px; }
 .ms-email-label { font-size: 13px; font-weight: 700; text-align: left; }
+.ms-remember { display: flex; align-items: center; gap: 8px; font-size: 13px; text-align: left; cursor: pointer; }
 .ms-email { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #8C8C8C; border-radius: 6px; font-size: 15px; box-sizing: border-box; }
 .ms-button { width: 100%; height: 48px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px solid #8C8C8C; border-radius: 6px; background: #fff; color: #2F2F2F; font-weight: 700; font-size: 15px; }
 .ms-button:hover { background: #F3F3F3; }

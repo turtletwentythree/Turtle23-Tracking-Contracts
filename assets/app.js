@@ -158,6 +158,9 @@
     $("#demoAccountSection").hidden = !demo;
     $("#loginForm").hidden = !passwordAllowed;
     $("#loginDivider").hidden = !passwordAllowed;
+    // "Remember me": stay signed in on this browser and pre-fill the email next time
+    const rem = window.Store.remembered?.();
+    if (rem) { $("#msRemember").checked = rem.on; if (rem.email) $("#msEmail").value = rem.email; }
     $("#msForm").addEventListener("submit", async e => {
       e.preventDefault();
       const domain = (window.APP_CONFIG?.EMAIL_DOMAIN || "turtle23.com").toLowerCase();
@@ -166,6 +169,7 @@
       if (!/^[^@\s]+@[^@\s]+$/.test(email)) return showLoginError("กรุณากรอกอีเมลบริษัท เช่น name@" + domain);
       if (!email.endsWith("@" + domain)) return showLoginError(`ใช้ได้เฉพาะอีเมล @${domain} ของ Turtle23 เท่านั้น`);
       showLoginError("");
+      window.Store.setRemember?.($("#msRemember").checked, email);
       const b = $("#msLogin");
       b.disabled = true; $("#msLoginText").textContent = "Redirecting to Microsoft...";
       try { await window.Store.signInMicrosoft(email); }
@@ -290,7 +294,7 @@
         <div class="kpi" data-kpi="avg"><div class="kpi-label">3. Avg Complete Day</div><div class="kpi-value">${completed30.length ? avgComplete.toFixed(1) : 0}</div><div class="kpi-note">Total Spending Days</div></div>
         <div class="kpi" data-kpi="overdue"><div class="kpi-label">4. Overdue Contracts</div><div class="kpi-value">${overdue.length}</div><div class="kpi-note">R = Overdue</div></div>
       </div>
-      <div class="dash-grid">
+      <div class="dash-grid" style="grid-template-columns:minmax(0,1fr)"><!-- widget 6 on its own row -->
         <section class="panel">
           <div class="panel-head"><div><h2>5. Longest pending on hand</h2><p>R = Overdue · Highest accumulated working days first</p></div></div>
           <div class="table-wrap" style="max-height:760px">

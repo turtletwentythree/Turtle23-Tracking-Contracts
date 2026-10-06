@@ -153,12 +153,30 @@
       this.mode = "supabase";
       this.cfg = cfg;
       this.client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-        // Session lives only in this browser tab (sessionStorage): closing the tab signs the user out,
-        // so every new visit starts at the Microsoft 365 email sign-in.
-        auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true, storage: window.sessionStorage }
+        // "Remember me" off (default): session lives only in this tab (sessionStorage), closing it signs the user out.
+        // "Remember me" on: session kept in localStorage, so returning to the site skips the Microsoft sign-in.
+        auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true, storage: this.authStorage() }
       });
     }
     async init() {}
+    authStorage() {
+      const ls = window.localStorage, ss = window.sessionStorage, on = () => this.remembered().on;
+      return {
+        getItem: k => ss.getItem(k) ?? ls.getItem(k),
+        setItem: (k, v) => { (on() ? ls : ss).setItem(k, v); (on() ? ss : ls).removeItem(k); },
+        removeItem: k => { ss.removeItem(k); ls.removeItem(k); }
+      };
+    }
+    remembered() {
+      try { return { on: localStorage.getItem("ct-remember") === "1", email: localStorage.getItem("ct-remember-email") || "" }; }
+      catch (e) { return { on: false, email: "" }; }
+    }
+    setRemember(on, email) {
+      try {
+        if (on) { localStorage.setItem("ct-remember", "1"); localStorage.setItem("ct-remember-email", email || ""); }
+        else { localStorage.removeItem("ct-remember"); localStorage.removeItem("ct-remember-email"); }
+      } catch (e) { /* storage blocked: behaves as not remembered */ }
+    }
     toEmail(username) {
       const u = String(username || "").trim();
       return u.includes("@") ? u : `${u}@${this.cfg.EMAIL_DOMAIN}`;
@@ -178,9 +196,10 @@
       const redirectTo = window.location.origin + window.location.pathname;
       const { error } = await this.client.auth.signInWithOAuth({
         provider: "azure",
-        // prompt=login: Microsoft always asks for the password, even if already signed in to M365.
+        // prompt=login (Remember me off): Microsoft always asks for the password, even if already signed in to M365.
         // login_hint pre-fills the Turtle23 email typed on our page (tenant is locked by the Azure provider's Tenant URL).
-        options: { scopes: "openid email profile offline_access", redirectTo, queryParams: { prompt: "login", login_hint: email || "" } }
+        options: { scopes: "openid email profile offline_access", redirectTo,
+          queryParams: this.remembered().on ? { login_hint: email || "" } : { prompt: "login", login_hint: email || "" } }
       });
       if (error) throw error; // on success the browser leaves for login.microsoftonline.com
     }
