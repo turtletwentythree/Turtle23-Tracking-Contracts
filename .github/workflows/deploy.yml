@@ -57,6 +57,10 @@ jobs:
             require("fs").writeFileSync("assets/config.js", "window.APP_CONFIG = " + JSON.stringify(cfg, null, 2) + ";\n");
           '
 
+      # Stamp every script and stylesheet link with this commit, so browsers load the new files after each deploy
+      - name: Version asset links
+        run: sed -i -E "s#(assets/[a-z-]+\.(js|css))\"#\1?v=${GITHUB_SHA::7}\"#g" index.html && grep -o 'assets/[^"]*' index.html
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
