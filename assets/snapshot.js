@@ -48,9 +48,11 @@
       updated_by: text(r["Updated By"]),
       updated_at: text(r["Updated Date and Time"]),
       details: {
-        // Action names/descriptions (TH/EN) are labels of the Action Code and are not repeated on every log
-        ...pick(r, ["Days on Hand", "Alert", "Delay Reason", "Action Reason", "Corrective Action", "Action Reason Type",
-          "Action Reason Detail", "Approval Type", "Approval Conditions", "Corrective Action Detail", "Action Code", "Action SLA"]),
+        // Every snapshot column without a column of its own; 007_log_view.sql copies them into contract_logs columns
+        ...pick(r, ["Log View", "Days on Hand", "Alert", "Delay Reason", "Action Reason", "Corrective Action", "Action Reason Type",
+          "Action Reason Detail", "Approval Type", "Approval Conditions", "Corrective Action Detail", "Action Code",
+          "Action Name TH", "Action Name EN", "Action Description TH", "Action Description EN", "Action SLA",
+          "Action Reason Type TH", "Action Reason Type EN"]),
         attachments: json(r["Attachments"], []),
         cc_recipients: json(r["CC Recipients"], [])
       }

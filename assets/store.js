@@ -237,6 +237,9 @@
         if (error) throw error;
         out[t] = data;
       }));
+      // Log View headers (007_log_view.sql); without that table the app uses its built-in headers
+      const cols = await this.client.from("log_view_columns").select("*");
+      if (!cols.error) out.log_view_columns = cols.data;
       return out;
     }
     async insert(table, row) {

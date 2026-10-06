@@ -401,7 +401,7 @@
       return `${group}<tr>${CONTRACT_COLS.map(col => {
         const v = cellValue(c, m, col.k);
         if (col.k === "id") return `<td><button class="id-link" data-open="${esc(c.id)}">${esc(v)}</button></td>`;
-        if (col.k === "_log") return `<td style="min-width:190px"><button class="log-link" data-open="${esc(c.id)}" title="Open Log View Detail">${esc(v)}</button></td>`;
+        if (col.k === "_log") return `<td style="min-width:190px"><button class="log-link" data-log-view="${esc(c.id)}" title="Open Log View Detail">${esc(v)}</button></td>`;
         if (col.k === "_status") return `<td>${contractStatusTag(m.code)}</td>`;
         if (col.k === "due_date") return `<td style="white-space:nowrap">${fmtDate(v)}</td>`;
         if (col.k === "name") return `<td style="min-width:200px">${esc(v)}</td>`;
@@ -453,6 +453,112 @@
     return rows.filter(r => r.some(x => x !== ""));
   }
 
+  // ───────────── Log View Detail (same windows as the original Contract Tracking app) ─────────────
+  // Headers and rows come from public.log_view_columns (007_log_view.sql); these are the same defaults
+  const LOG_VIEW_DEFAULT = [
+    ["table", "contract_id", "Contract ID", "รหัสสัญญา"], ["table", "log_view", "Log View", "เส้นทาง"], ["table", "from_person", "From", "จาก"],
+    ["table", "to_person", "To", "ถึง"], ["table", "in_date", "In", "วันที่รับ"], ["table", "out_date", "Out", "วันที่ส่งต่อ"], ["table", "sla", "SLA", "SLA"],
+    ["table", "days_on_hand", "Days on Hand (Mon–Fri)", "วันที่ถืองาน (จ.–ศ.)"], ["table", "alert", "Alert", "การแจ้งเตือน"],
+    ["table", "delay_reason", "Delay Reason", "เหตุผลที่ล่าช้า"], ["table", "action", "Action", "การดำเนินการ"],
+    ["detail", "action", "Action", "การดำเนินการ"], ["detail", "alert", "Alert", "การแจ้งเตือน"], ["detail", "status_update", "Status Update", "สถานะปัจจุบัน"],
+    ["detail", "description", "Description", "คำอธิบาย"], ["detail", "reason_type", "Reason Type", "ประเภทเหตุผล"], ["detail", "reason", "Reason", "เหตุผล"],
+    ["detail", "delay_reason", "Delay Reason", "เหตุผลที่ล่าช้า"], ["detail", "approval", "Approval", "การอนุมัติ"],
+    ["detail", "corrective_action", "Corrective Action", "การแก้ไข"], ["detail", "sla", "SLA", "ระยะเวลาดำเนินการ"],
+    ["detail", "updated_by", "Updated By", "ผู้บันทึก"], ["detail", "attachments", "Attachments", "ไฟล์แนบ"], ["detail", "cc_recipients", "CC Recipients", "ผู้รับสำเนา"]
+  ].map(([section, key, label_en, label_th], i) => ({ section, key, label_en, label_th, position: i, visible: true }));
+  function logViewCols(section) {
+    const all = S.db.log_view_columns && S.db.log_view_columns.length ? S.db.log_view_columns : LOG_VIEW_DEFAULT;
+    return all.filter(r => r.section === section && r.visible !== false).sort((a, b) => a.position - b.position);
+  }
+  // A log field: its own column (007_log_view.sql) or, before that migration, the snapshot column kept in `details`
+  const LOG_DETAIL_KEY = {
+    log_view: "Log View", days_on_hand: "Days on Hand", alert: "Alert", delay_reason: "Delay Reason", action_reason: "Action Reason",
+    corrective_action: "Corrective Action", action_reason_type: "Action Reason Type", action_reason_detail: "Action Reason Detail",
+    approval_type: "Approval Type", approval_conditions: "Approval Conditions", corrective_action_detail: "Corrective Action Detail",
+    action_code: "Action Code", action_name_th: "Action Name TH", action_name_en: "Action Name EN", action_description_th: "Action Description TH",
+    action_description_en: "Action Description EN", action_sla: "Action SLA", action_reason_type_th: "Action Reason Type TH", action_reason_type_en: "Action Reason Type EN"
+  };
+  function lf(l, k) {
+    const v = l[k];
+    if (Array.isArray(v) ? v.length : v !== undefined && v !== null && v !== "") return v;
+    const d = l.details || {};
+    if (k === "attachments" || k === "cc_recipients") return Array.isArray(d[k]) ? d[k] : [];
+    return d[LOG_DETAIL_KEY[k]] ?? "";
+  }
+  function alertBadge(text) {
+    const t = String(text || "");
+    if (!t) return "-";
+    const code = /Black|(^|[^A-Z])B\s*=/.test(t) ? "tag-dark" : /Red|(^|[^A-Z])R\s*=/.test(t) ? "tag-red" : /Yellow|(^|[^A-Z])Y\s*=/.test(t) ? "tag-amber"
+      : /Gray|(^|[^A-Z])U\s*=/.test(t) ? "tag-grey" : "tag-green";
+    return `<span class="tag status-dot ${code}">${esc(t.split(">>").pop().trim())}</span>`;
+  }
+  const logRoute = l => `From ${l.from_person || "-"} / To ${l.to_person || "-"}`;
+  function logCell(l, key) {
+    switch (key) {
+      case "contract_id": return `<span class="log-cid">${esc(l.contract_id)}</span>`;
+      case "log_view": return `<span class="log-route">${esc(logRoute(l))}</span>`;
+      case "in_date": case "out_date": return l[key] ? fmtDate(l[key]) : "";
+      case "days_on_hand": { const v = lf(l, key); return esc(v !== "" ? v : workdays(l.in_date, l.out_date || todayISO())); }
+      case "alert": return alertBadge(lf(l, "alert"));
+      case "delay_reason": return esc(lf(l, key) || "-");
+      case "action": return `<button class="log-action-btn" data-log-action="${esc(l.contract_id)}#${esc(l.log_no)}" title="View reason / ดูเหตุผล">${esc(lf(l, "action_name_en") || l.action || "-")}</button>`;
+      default: { const v = lf(l, key); return esc(typeof v === "object" ? JSON.stringify(v) : v); }
+    }
+  }
+  function logDetailValue(l, key, c) {
+    const fmtDT = v => { const d = new Date(v); return isNaN(d) ? String(v || "") : d.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }); };
+    switch (key) {
+      case "action": return [lf(l, "action_name_en") || l.action, lf(l, "action_name_th")];
+      case "alert": return [String(lf(l, "alert")).split(">>").pop().trim()];
+      case "status_update": return [c ? CONTRACT_STATUS_LABEL[metrics(c).code] : ""];
+      case "description": return [lf(l, "action_description_en"), lf(l, "action_description_th")];
+      case "reason_type": return [lf(l, "action_reason_type_en") || lf(l, "action_reason_type"), lf(l, "action_reason_type_th")];
+      case "reason": return [lf(l, "action_reason_detail") || lf(l, "action_reason") || l.reason];
+      case "delay_reason": return [lf(l, "delay_reason")];
+      case "approval": return [[lf(l, "approval_type"), l.approval, lf(l, "approval_conditions")].filter(Boolean).join(" · ")];
+      case "corrective_action": return [lf(l, "corrective_action_detail") || lf(l, "corrective_action")];
+      case "sla": return [lf(l, "action_sla") !== "" ? `${lf(l, "action_sla")} วันทำการ` : l.sla != null ? `${l.sla} วันทำการ` : ""];
+      case "updated_by": return [l.updated_by, l.updated_at ? fmtDT(l.updated_at) : ""];
+      case "attachments": return [logFiles(l), "", true];
+      case "cc_recipients": return [lf(l, "cc_recipients").map(x => typeof x === "string" ? x : x.name || x.email || "").filter(Boolean).join(", ")];
+      default: { const v = lf(l, key); return [typeof v === "object" ? JSON.stringify(v) : v]; }
+    }
+  }
+  function openModal(slot, title, subtitle, body, wide) {
+    let root = $(`#${slot}`);
+    if (!root) { root = document.createElement("div"); root.id = slot; document.body.appendChild(root); }
+    root.innerHTML = `<div class="modal-backdrop" data-close-modal>
+      <section class="modal${wide ? " modal-wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+        <header class="modal-head"><div><h2>${esc(title)}</h2><p>${esc(subtitle)}</p></div><button class="icon-button" data-close-modal aria-label="Close">✕</button></header>
+        <div class="modal-body">${body}</div></section></div>`;
+    $$("[data-close-modal]", root).forEach(el => el.addEventListener("click", e => { if (e.target === el) root.innerHTML = ""; }));
+    return root;
+  }
+  function openLogView(id) {
+    const c = visibleContracts().find(x => x.id === id);
+    if (!c) return toast("ไม่มีสิทธิ์ดูสัญญานี้", true);
+    const cols = logViewCols("table");
+    const logs = logsOf(id).slice().reverse();
+    const body = `<div class="table-wrap" style="max-height:calc(100vh - 220px)"><table class="grid compact log-view-table">
+      <thead><tr>${cols.map(col => `<th title="${esc(col.label_th || "")}">${esc(col.label_en)}</th>`).join("")}</tr></thead>
+      <tbody>${logs.map(l => `<tr>${cols.map(col => `<td>${logCell(l, col.key)}</td>`).join("")}</tr>`).join("")
+        || `<tr><td colspan="${cols.length}" class="empty">No Log View Detail found.</td></tr>`}</tbody></table></div>`;
+    const root = openModal("logViewRoot", "Log View Detail", `${c.id} - ${c.name}`, body, true);
+    $$("[data-log-action]", root).forEach(b => b.addEventListener("click", () => openLogAction(b.dataset.logAction)));
+  }
+  function openLogAction(ref) {
+    const [cid, no] = ref.split("#");
+    const c = visibleContracts().find(x => x.id === cid);
+    const l = c && S.db.contract_logs.find(x => x.contract_id === cid && String(x.log_no) === no);
+    if (!l) return;
+    const rows = logViewCols("detail").map(col => ({ col, v: logDetailValue(l, col.key, c) })).filter(({ v }) => String(v[0] || "").trim() || String(v[1] || "").trim());
+    const body = `<div class="reason-grid">${rows.map(({ col, v }) => `<div class="reason-row">
+        <div class="reason-label"><strong>${esc(col.label_en)}</strong><span>${esc(col.label_th || "")}</span></div>
+        <div class="reason-value">${v[2] ? v[0] : `<strong>${esc(v[0] || "-")}</strong>`}${v[1] ? `<span>${esc(v[1])}</span>` : ""}</div></div>`).join("")
+      || `<p class="muted">No reason recorded.<br>ไม่มีการบันทึกเหตุผล</p>`}</div>`;
+    openModal("logActionRoot", "Action Reason", `${cid} · Log ${l.log_no} · Cycle ${l.cycle}`, body);
+  }
+
   // ───────────── Contract detail drawer ─────────────
   // Attachments of a log (from the Production Snapshot): each link opens the file in Google Drive,
   // or its Drive folder when the snapshot has no link to the file itself
@@ -486,7 +592,7 @@
             ${kv("Balance", `<span style="color:${m.balance < 0 ? "var(--red)" : "inherit"}">${m.balance}</span>`)}${kv("Cycle / Returns", `${c.cycle} / ${c.returns}`)}${kv("Closed", c.closed_at ? `${fmtDate(c.closed_at)} · ${esc(c.close_reason || "")}` : "-")}
           </div>
           ${c.remark ? `<div><p class="section-title">Remark</p><div class="current-card small">${esc(c.remark)}</div></div>` : ""}
-          <div><p class="section-title">Log View · ประวัติการดำเนินการ (${logs.length})</p>
+          <div><p class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">Log View · ประวัติการดำเนินการ (${logs.length})<button class="btn" data-log-view="${esc(c.id)}">Log View Detail</button></p>
             <div class="timeline">${logs.map(l => `<div class="tl-item"><strong>#${l.log_no} ${esc(l.action || "-")}</strong> <span class="small muted">Cycle ${l.cycle} · SLA ${l.sla ?? "-"} วัน</span>
               <div class="small">From <b>${esc(l.from_person || "-")}</b> → To <b>${esc(l.to_person || "-")}</b></div>
               <div class="small muted">In ${fmtDate(l.in_date)} · Out ${l.out_date ? fmtDate(l.out_date) : "-"} · by ${esc(l.updated_by || "-")}</div>
@@ -497,6 +603,7 @@
             <button class="btn" data-goto-step="due" data-cid="${esc(c.id)}">Request Due Date</button><button class="btn btn-primary" data-goto-step="close" data-cid="${esc(c.id)}">Close Case</button></div>` : ""}
         </div></aside></div>`;
     $$("[data-close-drawer]", $("#drawerRoot")).forEach(el => el.addEventListener("click", e => { if (e.target === el) closeDrawer(); }));
+    $$("[data-log-view]", $("#drawerRoot")).forEach(b => b.addEventListener("click", () => openLogView(b.dataset.logView)));
     $$("[data-goto-step]", $("#drawerRoot")).forEach(b => b.addEventListener("click", () => {
       S.caseStep = b.dataset.gotoStep; S.selectedContract = b.dataset.cid; closeDrawer(); location.hash = "#/user";
       if (S.view === "user") render();
@@ -959,6 +1066,7 @@
       S.search[view] = c.id; location.hash = "#/" + view; setTimeout(() => openDrawer(c.id), 0);
     }));
     $$("[data-dash]", root).forEach(s => s.addEventListener("change", () => { S.dash[s.dataset.dash] = s.value; render(); }));
+    $$("[data-log-view]", root).forEach(b => b.addEventListener("click", () => openLogView(b.dataset.logView)));
     $$("[data-col-filter]", root).forEach(s => s.addEventListener("change", () => { S.filters[s.dataset.viewName][s.dataset.colFilter] = s.value; render(); }));
     $$("[data-due-range]", root).forEach(i => i.addEventListener("change", () => { S.filters[i.dataset.viewName][i.dataset.dueRange] = i.value; render(); }));
     $$("[data-due-clear]", root).forEach(b => b.addEventListener("click", () => { const f = S.filters[b.dataset.dueClear]; f.dueFrom = f.dueTo = ""; render(); }));
@@ -1052,10 +1160,14 @@
     $("#profileTrigger").addEventListener("click", e => { e.stopPropagation(); $("#profileDropdown").hidden = !$("#profileDropdown").hidden; });
     document.addEventListener("click", e => { if (!e.target.closest(".profile-menu")) $("#profileDropdown").hidden = true; });
     document.addEventListener("click", e => { if (!e.target.closest("[data-filter-menu]")) $$("[data-filter-menu][open]").forEach(m => m.removeAttribute("open")); });
-    document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+    document.addEventListener("keydown", e => {
+      if (e.key !== "Escape") return;
+      const top = ["logActionRoot", "logViewRoot"].map(id => $(`#${id}`)).find(r => r && r.innerHTML);
+      if (top) top.innerHTML = ""; else closeDrawer();
+    });
     $("#logoutBtn").addEventListener("click", async () => {
       $$(".toast").forEach(t => t.remove());
-      await window.Store.signOut(); S.user = null; document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
+      await window.Store.signOut(); S.user = null; ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
     });
     try { S.user = await window.Store.currentUser(); } catch (e) { S.user = null; showLoginError(e.message); }
     if (S.user) await enterApp();
