@@ -183,6 +183,20 @@ table.grid.compact td { padding: 6px 8px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .id-link { color: var(--t23-orange-dark); font-weight: 800; background: none; border: 0; padding: 0; text-decoration: none; white-space: nowrap; }
 .id-link:hover { text-decoration: underline; }
+.filter-th { min-width: 118px; }
+.filter-th details { display: block; }
+.filter-th summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; user-select: none; }
+.filter-th summary::-webkit-details-marker { display: none; }
+.filter-th summary::after { content: "▾"; margin-left: auto; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center; background: #fff; color: var(--t23-black); font-size: 10px; line-height: 1; flex: none; }
+.filter-th summary.on::after, .filter-th details[open] summary::after { background: var(--t23-green); }
+.th-filter-popover { position: fixed; z-index: 900; min-width: 200px; max-width: min(320px, calc(100vw - 24px)); padding: 8px; display: grid; gap: 6px; border: 1px solid #DDE3CC; border-radius: 8px; background: #fff; color: var(--t23-black); box-shadow: 0 14px 32px rgba(15, 23, 42, .16); white-space: normal; font-weight: 400; }
+.th-filter-popover .select, .th-filter-popover .input { width: 100%; min-height: 30px; font-size: 12px; padding: 6px 8px; }
+.th-filter-popover .range-row { display: grid; gap: 3px; font-size: 11px; }
+.th-filter-popover .btn { min-height: 28px; font-size: 11px; }
+.contract-department-group td { padding: 8px 10px; background: #F1F5DF; border-top: 1px solid #CBD5A4; border-bottom: 1px solid #DFE5C8; font-size: 12px; }
+.contract-department-group td strong { margin-right: 8px; }
+.contract-department-group td span { color: var(--muted, #6b6f63); font-size: 11px; font-weight: 600; }
+.log-link { padding: 0; border: 0; background: none; color: var(--t23-orange-dark); font-weight: 700; text-align: left; text-decoration: underline; text-underline-offset: 3px; line-height: 1.35; cursor: pointer; }
 .th-filter { display: inline-flex; align-items: center; gap: 6px; }
 .th-filter select { max-width: 22px; height: 20px; border-radius: 4px; border: 0; background: #fff; color: var(--t23-black); font-size: 10px; padding: 0; cursor: pointer; }
 .th-filter select.on { background: var(--t23-green); max-width: 140px; }

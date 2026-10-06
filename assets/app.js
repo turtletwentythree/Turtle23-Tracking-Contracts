@@ -344,6 +344,7 @@
   }
 
   // ───────────── Contracts table ─────────────
+  // Columns, order and layout follow the original Contract Status table (Project-Contract-tracking)
   const CONTRACT_COLS = [
     { k: "id", label: "Contract ID", filter: true },
     { k: "name", label: "Contract Name" },
@@ -351,24 +352,21 @@
     { k: "owner", label: "Contract Owner", filter: true },
     { k: "type", label: "Type of Contract", filter: true },
     { k: "vendor", label: "Vendor / Counter party" },
-    { k: "stage", label: "Stage", filter: true },
-    { k: "cycle", label: "Cycle", num: true },
-    { k: "returns", label: "Returns", num: true },
+    { k: "_log", label: "Log View" },
+    { k: "stage", label: "Stage", filter: true, all: "All stages" },
+    { k: "cycle", label: "Total No. of Cycle" },
+    { k: "returns", label: "Total No. of Return" },
     { k: "_status", label: "Status Update", filter: true },
-    { k: "_station", label: "Station" },
-    { k: "station_to", label: "Station Owner", filter: true },
-    { k: "due_date", label: "Due Date" },
-    { k: "total_sla", label: "Total SLA", num: true },
-    { k: "_used", label: "Days Used", num: true },
-    { k: "_onHand", label: "Days on Hand", num: true },
-    { k: "_balance", label: "Balance", num: true }
+    { k: "_stationOwner", label: "Station Owner", filter: true },
+    { k: "due_date", label: "Due date", dateRange: true }
   ];
+  const CONTRACT_STATUS_LABEL = { ...STATUS_LABEL, C: "B=Completed", X: "B=Cancelled" };
+  const contractStatusTag = code => `<span class="tag status-dot ${code === "C" || code === "X" ? "tag-dark" : STATUS_TAG[code]}">${CONTRACT_STATUS_LABEL[code]}</span>`;
   function cellValue(c, m, k) {
-    if (k === "_status") return STATUS_LABEL[m.code];
-    if (k === "_station") return `From ${c.station_from || "-"} >> To ${c.station_to || "-"}`;
-    if (k === "_used") return m.used;
-    if (k === "_onHand") return m.onHand;
-    if (k === "_balance") return m.balance;
+    const last = k === "_log" || k === "_stationOwner" ? latestLog(c.id) : null;
+    if (k === "_status") return CONTRACT_STATUS_LABEL[m.code];
+    if (k === "_log") return last ? `From ${last.from_person || "-"} / To ${last.to_person || "-"}` : `From ${c.station_from || "-"} >> To ${c.station_to || "-"}`;
+    if (k === "_stationOwner") return (last && last.to_person) || c.station_to || "";
     return c[k] ?? "";
   }
 
@@ -378,11 +376,41 @@
     const q = (S.search[view] || "").toLowerCase();
     const rows = contractsFor(view).map(c => ({ c, m: metrics(c) }));
     const shown = rows.filter(({ c, m }) =>
-      CONTRACT_COLS.every(col => !f[col.k] || String(cellValue(c, m, col.k)) === f[col.k]) &&
-      (!q || [c.id, c.name, c.vendor, c.owner, c.department, c.remark].join(" ").toLowerCase().includes(q)));
+      CONTRACT_COLS.every(col => col.dateRange || !f[col.k] || String(cellValue(c, m, col.k)) === f[col.k]) &&
+      (!f.dueFrom || (c.due_date || "") >= f.dueFrom) && (!f.dueTo || (c.due_date && c.due_date <= f.dueTo)) &&
+      (!q || [c.id, c.name, c.vendor, c.owner, c.department, c.remark].join(" ").toLowerCase().includes(q)))
+      .sort((a, b) => (a.c.department || "Unassigned").localeCompare(b.c.department || "Unassigned") || a.c.id.localeCompare(b.c.id));
+    const deptCount = {};
+    shown.forEach(({ c }) => { const d = c.department || "Unassigned"; deptCount[d] = (deptCount[d] || 0) + 1; });
+    const head = col => {
+      if (col.dateRange) return `<th class="filter-th"><details data-filter-menu><summary class="${f.dueFrom || f.dueTo ? "on" : ""}">${esc(col.label)}</summary>
+        <div class="th-filter-popover"><label class="range-row"><span>From / จากวันที่</span><input class="input" type="date" data-due-range="dueFrom" data-view-name="${view}" value="${esc(f.dueFrom || "")}"></label>
+          <label class="range-row"><span>To / ถึงวันที่</span><input class="input" type="date" data-due-range="dueTo" data-view-name="${view}" value="${esc(f.dueTo || "")}"></label>
+          <button class="btn" type="button" data-due-clear="${view}">Clear</button></div></details></th>`;
+      if (!col.filter) return `<th>${esc(col.label)}</th>`;
+      const opts = uniq(rows.map(({ c, m }) => String(cellValue(c, m, col.k))).filter(Boolean)).sort();
+      return `<th class="filter-th"><details data-filter-menu><summary class="${f[col.k] ? "on" : ""}">${esc(col.label)}</summary>
+        <div class="th-filter-popover"><select class="select" data-col-filter="${col.k}" data-view-name="${view}" aria-label="Filter ${esc(col.label)}">
+          <option value="">${esc(col.all || `All ${col.label}`)}</option>${opts.map(o => `<option ${f[col.k] === o ? "selected" : ""} value="${esc(o)}">${esc(o)}</option>`).join("")}</select></div></details></th>`;
+    };
+    let prevDept = null;
+    const body = shown.map(({ c, m }) => {
+      const dept = c.department || "Unassigned";
+      const group = dept !== prevDept ? `<tr class="contract-department-group"><td colspan="${CONTRACT_COLS.length}"><strong>${esc(dept)}</strong><span>${deptCount[dept]} contract(s)</span></td></tr>` : "";
+      prevDept = dept;
+      return `${group}<tr>${CONTRACT_COLS.map(col => {
+        const v = cellValue(c, m, col.k);
+        if (col.k === "id") return `<td><button class="id-link" data-open="${esc(c.id)}">${esc(v)}</button></td>`;
+        if (col.k === "_log") return `<td style="min-width:190px"><button class="log-link" data-open="${esc(c.id)}" title="Open Log View Detail">${esc(v)}</button></td>`;
+        if (col.k === "_status") return `<td>${contractStatusTag(m.code)}</td>`;
+        if (col.k === "due_date") return `<td style="white-space:nowrap">${fmtDate(v)}</td>`;
+        if (col.k === "name") return `<td style="min-width:200px">${esc(v)}</td>`;
+        return `<td>${esc(v)}</td>`;
+      }).join("")}</tr>`;
+    }).join("");
     return `<section class="panel">
       <div class="panel-head">
-        <div><h2>${view === "confidential" ? "Confidential Contracts" : "Contract Status"}</h2><p>ติดตาม Contract Owner, cycle, return และสถานะล่าสุด · ${shown.length} / ${rows.length} รายการ</p></div>
+        <div><h2>${view === "confidential" ? "Confidential Contract Status" : "Contract Status"}</h2><p>ติดตาม Contract Owner, cycle, return และสถานะล่าสุด · ${shown.length} / ${rows.length} รายการ</p></div>
         <div class="toolbar">
           <input class="input search" type="search" placeholder="ค้นหา ID, ชื่อสัญญา, Vendor..." value="${esc(S.search[view] || "")}" data-search="${view}">
           ${Object.values(f).some(Boolean) ? `<button class="btn" data-clear-filters="${view}">ล้างตัวกรอง</button>` : ""}
@@ -390,22 +418,9 @@
         </div>
       </div>
       <div class="table-wrap" style="max-height:calc(100vh - 230px)">
-        <table class="grid">
-          <thead><tr>${CONTRACT_COLS.map(col => {
-            if (!col.filter) return `<th class="${col.num ? "num" : ""}">${esc(col.label)}</th>`;
-            const opts = uniq(rows.map(({ c, m }) => String(cellValue(c, m, col.k)))).sort();
-            return `<th><span class="th-filter">${esc(col.label)}<select class="${f[col.k] ? "on" : ""}" data-col-filter="${col.k}" data-view-name="${view}" title="Filter">
-              <option value="">▾</option>${opts.map(o => `<option ${f[col.k] === o ? "selected" : ""} value="${esc(o)}">${esc(o)}</option>`).join("")}</select></span></th>`;
-          }).join("")}</tr></thead>
-          <tbody>${shown.map(({ c, m }) => `<tr>${CONTRACT_COLS.map(col => {
-            const v = cellValue(c, m, col.k);
-            if (col.k === "id") return `<td><button class="id-link" data-open="${esc(c.id)}">${esc(v)}</button></td>`;
-            if (col.k === "_status") return `<td>${statusTag(m.code)}</td>`;
-            if (col.k === "due_date") return `<td style="white-space:nowrap">${fmtDate(v)}</td>`;
-            if (col.k === "_balance") return `<td class="num" style="color:${m.balance < 0 ? "var(--red)" : "inherit"};font-weight:700">${v}</td>`;
-            if (col.k === "name") return `<td style="min-width:200px">${esc(v)}</td>`;
-            return `<td class="${col.num ? "num" : ""}">${esc(v)}</td>`;
-          }).join("")}</tr>`).join("") || `<tr><td colspan="${CONTRACT_COLS.length}" class="empty">ไม่พบสัญญา</td></tr>`}</tbody>
+        <table class="grid contract-status">
+          <thead><tr>${CONTRACT_COLS.map(head).join("")}</tr></thead>
+          <tbody>${body || `<tr><td colspan="${CONTRACT_COLS.length}" class="empty">ไม่พบสัญญา</td></tr>`}</tbody>
         </table>
       </div></section>`;
   }
@@ -945,6 +960,21 @@
     }));
     $$("[data-dash]", root).forEach(s => s.addEventListener("change", () => { S.dash[s.dataset.dash] = s.value; render(); }));
     $$("[data-col-filter]", root).forEach(s => s.addEventListener("change", () => { S.filters[s.dataset.viewName][s.dataset.colFilter] = s.value; render(); }));
+    $$("[data-due-range]", root).forEach(i => i.addEventListener("change", () => { S.filters[i.dataset.viewName][i.dataset.dueRange] = i.value; render(); }));
+    $$("[data-due-clear]", root).forEach(b => b.addEventListener("click", () => { const f = S.filters[b.dataset.dueClear]; f.dueFrom = f.dueTo = ""; render(); }));
+    // Header filter menus: one open at a time, popover placed under its header (outside the scrolling table)
+    const placeMenu = menu => {
+      const r = menu.querySelector("summary").getBoundingClientRect(), pop = menu.querySelector(".th-filter-popover");
+      const w = Math.max(200, pop.offsetWidth || 200);
+      pop.style.left = `${Math.min(Math.max(12, r.left), window.innerWidth - w - 12)}px`;
+      pop.style.top = `${r.bottom + 6}px`;
+    };
+    $$("[data-filter-menu]", root).forEach(menu => menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      $$("[data-filter-menu][open]", root).forEach(o => { if (o !== menu) o.removeAttribute("open"); });
+      placeMenu(menu);
+    }));
+    $$(".contract-status", root).forEach(t => t.closest(".table-wrap").addEventListener("scroll", () => $$("[data-filter-menu][open]", root).forEach(placeMenu)));
     $$("[data-clear-filters]", root).forEach(b => b.addEventListener("click", () => { S.filters[b.dataset.clearFilters] = {}; render(); }));
     $$("[data-search]", root).forEach(i => i.addEventListener("input", () => {
       S.search[i.dataset.search] = i.value; const pos = i.selectionStart; render();
@@ -1021,6 +1051,7 @@
     $("#refreshBtn").addEventListener("click", () => guard(async () => { await reload(); renderNav(); render(); }, "รีเฟรชข้อมูลแล้ว"));
     $("#profileTrigger").addEventListener("click", e => { e.stopPropagation(); $("#profileDropdown").hidden = !$("#profileDropdown").hidden; });
     document.addEventListener("click", e => { if (!e.target.closest(".profile-menu")) $("#profileDropdown").hidden = true; });
+    document.addEventListener("click", e => { if (!e.target.closest("[data-filter-menu]")) $$("[data-filter-menu][open]").forEach(m => m.removeAttribute("open")); });
     document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
     $("#logoutBtn").addEventListener("click", async () => {
       $$(".toast").forEach(t => t.remove());
