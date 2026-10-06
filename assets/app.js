@@ -224,23 +224,58 @@
   }
 
   // ───────────── Dashboard ─────────────
+  // Dashboard rules (spec 2026-10-06):
+  //  - real state = Latest Action from the contract's log, Contract Stage only when there is no log
+  //  - Accumulated Days = working days (Mon–Fri) after Add Case Date up to today, or up to the Close Date once closed
+  //  - Status Update from Accumulated Days vs Total SLA only: < SLA = G, < SLA + 5 = Y, otherwise R; closed = B
+  const CLOSED_ACTION = /signed\s*\/\s*completed|^completed$/i;
+  const CANCELLED_ACTION = /cancel/i;
+  const DASH_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=Overdue", BC: "B=Completed", BX: "B=Cancelled" };
+  const DASH_TAG = { G: "tag-green", Y: "tag-amber", R: "tag-red", BC: "tag-dark", BX: "tag-grey" };
+  const isConfidential = c => c.access_level === "Confidential" || /^confidential/i.test(String(c.classification || ""));
+
+  function lastLogOf(id) {
+    let last = null;
+    S.db.contract_logs.forEach(l => {
+      if (l.contract_id !== id) return;
+      if (!last || l.log_no > last.log_no || (l.log_no === last.log_no && String(l.updated_at) > String(last.updated_at))) last = l;
+    });
+    return last;
+  }
+  function dashState(c, today) {
+    const log = lastLogOf(c.id);
+    const action = (log && log.action) || c.stage || "";
+    const kind = CLOSED_ACTION.test(action) ? "completed" : CANCELLED_ACTION.test(action) ? "cancelled" : "open";
+    const closeDate = kind === "open" ? null
+      : (log ? (log.in_date || String(log.updated_at || "").slice(0, 10)) : null) || c.closed_at || today;
+    const acc = workdays(c.add_case_date, closeDate || today);
+    const sla = Number(c.total_sla) || 0;
+    const code = kind === "completed" ? "BC" : kind === "cancelled" ? "BX" : acc < sla ? "G" : acc < sla + 5 ? "Y" : "R";
+    return { c, log, action, reason: (log && log.reason) || "", kind, closeDate, acc, code };
+  }
+  // Level 1-2: Day-to-day Work only · Level 3: Day-to-day Work + Confidential · Level 4: everything
+  function dashboardContracts() {
+    return S.db.contracts.filter(c => level() >= 4 || (level() >= 3 ? true : !isConfidential(c)));
+  }
+
   function renderDashboard() {
-    const all = visibleContracts().filter(c =>
+    const today = todayISO();
+    const scope = dashboardContracts();
+    const rows = scope.filter(c =>
       (!S.dash.department || c.department === S.dash.department) &&
-      (!S.dash.classification || (c.access_level === "Confidential" ? "Confidential" : "Day-to-day Work") === S.dash.classification));
-    const open = all.filter(c => c.status === "Open").map(c => ({ c, m: metrics(c) }));
-    const closed = all.filter(c => c.status === "Closed");
-    const since = iso(new Date(Date.now() - 30 * 864e5));
-    const closed30 = closed.filter(c => c.closed_at && c.closed_at >= since);
-    const avgComplete = closed.length ? (closed.reduce((s, c) => s + metrics(c).used, 0) / closed.length) : 0;
-    const overdue = open.filter(x => x.m.code === "R");
+      (!S.dash.classification || (isConfidential(c) ? "Confidential" : "Day-to-day Work") === S.dash.classification))
+      .map(c => dashState(c, today));
+    const open = rows.filter(x => x.kind === "open");
+    const since = iso(new Date(parseDate(today).getTime() - 30 * 864e5));
+    const completed30 = rows.filter(x => x.kind === "completed" && x.closeDate && x.closeDate >= since && x.closeDate <= today);
+    const avgComplete = completed30.length ? completed30.reduce((s, x) => s + x.acc, 0) / completed30.length : 0;
+    const overdue = open.filter(x => x.code === "R").sort((a, b) => b.acc - a.acc || a.c.id.localeCompare(b.c.id));
 
-    const depts = uniq(visibleContracts().map(c => c.department)).sort();
-    const pending = [...open].sort((a, b) => b.m.onHand - a.m.onHand);
-
+    const depts = uniq(scope.map(c => c.department)).sort();
     const byDept = {};
-    open.forEach(({ c, m }) => { (byDept[c.department] = byDept[c.department] || []).push(m.onHand); });
-    const avgRows = Object.entries(byDept).map(([d, a]) => [d, a.reduce((s, x) => s + x, 0) / a.length]).sort((a, b) => b[1] - a[1]);
+    open.forEach(x => { const d = x.c.department || "-"; (byDept[d] = byDept[d] || []).push(x.acc); });
+    const avgRows = Object.entries(byDept).map(([d, a]) => [d, a.reduce((s, v) => s + v, 0) / a.length]).sort((a, b) => b[1] - a[1]);
+    const late = open.filter(x => x.code === "Y" || x.code === "R");
 
     return `
       <div class="dash-filters">
@@ -250,59 +285,58 @@
           ${["Day-to-day Work", ...(can(3) ? ["Confidential"] : [])].map(d => `<option ${S.dash.classification === d ? "selected" : ""}>${d}</option>`).join("")}</select>
       </div>
       <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-label">1. Total Pending Contracts</div><div class="kpi-value">${open.length}</div><div class="kpi-note">Is Pending</div></div>
-        <div class="kpi"><div class="kpi-label">2. Completed Last 30 Days</div><div class="kpi-value">${closed30.length}</div><div class="kpi-note">ย้อนหลัง 30 วัน / Rolling 30 days</div></div>
-        <div class="kpi"><div class="kpi-label">3. Avg Complete Day</div><div class="kpi-value">${avgComplete ? avgComplete.toFixed(1) : 0}</div><div class="kpi-note">Total Spending Days</div></div>
-        <div class="kpi"><div class="kpi-label">4. Overdue Contracts</div><div class="kpi-value">${overdue.length}</div><div class="kpi-note">R = Overdue</div></div>
+        <div class="kpi" data-kpi="pending"><div class="kpi-label">1. Total Pending Contracts</div><div class="kpi-value">${open.length}</div><div class="kpi-note">Is Pending</div></div>
+        <div class="kpi" data-kpi="completed30"><div class="kpi-label">2. Completed Last 30 Days</div><div class="kpi-value">${completed30.length}</div><div class="kpi-note">ย้อนหลัง 30 วัน / Rolling 30 days</div></div>
+        <div class="kpi" data-kpi="avg"><div class="kpi-label">3. Avg Complete Day</div><div class="kpi-value">${completed30.length ? avgComplete.toFixed(1) : 0}</div><div class="kpi-note">Total Spending Days</div></div>
+        <div class="kpi" data-kpi="overdue"><div class="kpi-label">4. Overdue Contracts</div><div class="kpi-value">${overdue.length}</div><div class="kpi-note">R = Overdue</div></div>
       </div>
       <div class="dash-grid">
         <section class="panel">
-          <div class="panel-head"><div><h2>5. Longest pending on hand</h2><p>R = Overdue · Highest Days on Hand first</p></div></div>
+          <div class="panel-head"><div><h2>5. Longest pending on hand</h2><p>R = Overdue · Highest accumulated working days first</p></div></div>
           <div class="table-wrap" style="max-height:760px">
-            <table class="grid compact">
+            <table class="grid compact" data-widget="longest">
               <thead><tr><th>Contract Details</th><th>Ownership</th><th class="num">Day</th></tr></thead>
-              <tbody>${pending.map(({ c, m }) => {
-                const l = latestLog(c.id);
-                return `<tr class="pending-item">
-                  <td class="cd"><button class="id-link" data-open="${esc(c.id)}">${esc(c.id)}</button> ${m.code !== "G" ? `<span class="tag ${STATUS_TAG[m.code]}">${STATUS_LABEL[m.code]}</span>` : ""}
-                    <strong>${esc(c.name)}</strong>
-                    <div class="mini"><b>Type:</b> ${esc(c.type)}<br><b>Vendor:</b> ${esc(c.vendor || "-")}<br>
-                    <b>Latest Action / การดำเนินการล่าสุด:</b> ${esc(l?.action || c.stage)}<br><b>Reason / เหตุผล:</b> ${esc(l?.reason || "-")}</div></td>
-                  <td><div class="owner-block">Department</div><div class="owner-name">${esc(c.department)}</div>
-                    <div class="owner-block">Contract Owner</div><div class="owner-name">${esc(c.owner)}</div>
-                    <div class="owner-block">Station Owner</div><div class="owner-name">${esc(c.station_to || c.owner)}</div></td>
-                  <td class="num"><span class="day-badge ${m.code === "Y" ? "y" : m.code === "G" ? "g" : ""}">${m.onHand}D</span></td></tr>`;
-              }).join("") || `<tr><td colspan="3" class="empty">No pending contracts</td></tr>`}</tbody>
+              <tbody>${overdue.map(x => `<tr class="pending-item" data-row="${esc(x.c.id)}">
+                  <td class="cd"><button class="id-link" data-goto="${esc(x.c.id)}">${esc(x.c.id)}</button> <span class="tag ${DASH_TAG[x.code]}">${DASH_LABEL[x.code]}</span>
+                    <strong>${esc(x.c.name)}</strong>
+                    <div class="mini"><b>Type:</b> ${esc(x.c.type)}<br><b>Vendor:</b> ${esc(x.c.vendor || "-")}<br>
+                    <b>Latest Action / การดำเนินการล่าสุด:</b> ${esc(x.action || "-")}<br><b>Reason / เหตุผล:</b> ${esc(x.reason || "-")}</div></td>
+                  <td><div class="owner-block">Department</div><div class="owner-name">${esc(x.c.department)}</div>
+                    <div class="owner-block">Contract Owner</div><div class="owner-name">${esc(x.c.owner)}</div>
+                    <div class="owner-block">Station Owner</div><div class="owner-name">${esc((x.log && x.log.to_person) || x.c.station_to || x.c.owner)}</div></td>
+                  <td class="num"><span class="day-badge">${x.acc}D</span></td></tr>`).join("") || `<tr><td colspan="3" class="empty">No overdue contracts</td></tr>`}</tbody>
             </table>
           </div>
-          <div class="panel-body" style="padding-top:12px;text-align:right"><span class="tag tag-red">R = Overdue</span> <span class="small muted">${pending.length} Contracts</span></div>
+          <div class="panel-body" style="padding-top:12px;text-align:right"><span class="tag tag-red">R = Overdue</span> <span class="small muted">${overdue.length} Contracts</span></div>
         </section>
         <section class="panel">
-          <div class="panel-head"><div><h2>6. Avg Spending Time at Station by Dept</h2><p>Department · Average working days</p></div></div>
-          <div class="table-wrap"><table class="grid compact">
+          <div class="panel-head"><div><h2>6. Avg Spending Time at Station by Dept</h2><p>Department · Average accumulated working days (open contracts)</p></div></div>
+          <div class="table-wrap"><table class="grid compact" data-widget="dept-avg">
             <thead><tr><th>Department / Restaurant</th><th class="num">Avg. Days</th></tr></thead>
             <tbody>${avgRows.map(([d, a]) => `<tr><td><b>${esc(d)}</b></td><td class="num"><b>${Math.round(a * 10) / 10}</b> D</td></tr>`).join("") || `<tr><td colspan="2" class="empty">-</td></tr>`}</tbody>
           </table></div>
           <div class="panel-body small muted" style="padding-top:10px;text-align:right">${avgRows.length} Departments · Highest average first</div>
         </section>
       </div>
-      ${barPanel("7. By Person — Station Owner Status Summary", open, x => x.c.station_to || x.c.owner, true)}
-      ${barPanel("8. By Dept — Station Owner Status Summary", open, x => x.c.department, false)}`;
+      ${barPanel("7. By Person — Station Owner Status Summary", "by-person", late, x => x.c.owner, true)}
+      ${barPanel("8. By Dept — Station Owner Status Summary", "by-dept", late, x => x.c.department, false)}`;
   }
 
-  function barPanel(title, open, keyFn, withStages) {
+  // Horizontal stacked bars: Y=Delayed and R=Overdue of open contracts only
+  function barPanel(title, id, late, keyFn, withActions) {
     const groups = {};
-    open.forEach(x => { const k = keyFn(x) || "-"; (groups[k] = groups[k] || []).push(x); });
-    const rows = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+    late.forEach(x => { const k = keyFn(x) || "-"; (groups[k] = groups[k] || []).push(x); });
+    const rows = Object.entries(groups).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
     const max = Math.max(1, ...rows.map(r => r[1].length));
-    return `<section class="panel"><div class="panel-head"><div><h2>${esc(title)}</h2></div></div>
+    return `<section class="panel" data-widget="${id}"><div class="panel-head"><div><h2>${esc(title)}</h2><p>เฉพาะสัญญาที่ยังเปิดและเป็น Y=Delayed หรือ R=Overdue</p></div></div>
       <div class="panel-body"><div class="bar-list">${rows.map(([k, items]) => {
-        const n = { G: 0, Y: 0, R: 0 }; items.forEach(x => { n[x.m.code] = (n[x.m.code] || 0) + 1; });
-        const segs = ["R", "Y", "G"].filter(c => n[c]).map(c => `<div class="bar-seg ${c.toLowerCase()}" style="width:${(n[c] / max) * 100}%" title="${STATUS_LABEL[c]}">${n[c]}</div>`).join("");
-        const stages = withStages ? `<div class="stage-strip" style="width:${(items.length / max) * 100}%">${items.map(x => `<span class="stage-chip" title="${esc(x.c.id)}">${esc(x.c.stage)}</span>`).join("")}</div><span></span>` : "";
-        return `<div class="bar-row"><div class="bar-name">${esc(k)}</div><div class="bar-track">${segs}</div><div class="bar-total">${items.length}</div>${withStages ? `<span></span>${stages}` : ""}</div>`;
-      }).join("") || `<div class="empty">No data</div>`}</div>
-      <div class="legend"><span class="g">G = On Track</span><span class="y">Y = Delayed</span><span class="r">R = Overdue</span></div></div></section>`;
+        const n = { Y: 0, R: 0 }; items.forEach(x => { n[x.code]++; });
+        const segs = ["R", "Y"].filter(c => n[c]).map(c => `<div class="bar-seg ${c.toLowerCase()}" data-seg="${c}" style="width:${(n[c] / max) * 100}%" title="${DASH_LABEL[c]}">${n[c]}</div>`).join("");
+        const actions = withActions ? `<div class="stage-strip" style="width:${(items.length / max) * 100}%">${[...items].sort((a, b) => b.acc - a.acc)
+          .map(x => `<span class="stage-chip" title="${esc(x.c.id)} · ${DASH_LABEL[x.code]}">${esc(x.action || "-")}</span>`).join("")}</div><span></span>` : "";
+        return `<div class="bar-row"><div class="bar-name">${esc(k)}</div><div class="bar-track">${segs}</div><div class="bar-total">${items.length}</div>${withActions ? `<span></span>${actions}` : ""}</div>`;
+      }).join("") || `<div class="empty">ไม่มีสัญญาที่ Delayed หรือ Overdue</div>`}</div>
+      <div class="legend"><span class="y">Y = Delayed</span><span class="r">R = Overdue</span></div></div></section>`;
   }
 
   // ───────────── Contracts table ─────────────
@@ -887,6 +921,12 @@
   // ───────────── Event binding ─────────────
   function bindView(root) {
     $$("[data-open]", root).forEach(b => b.addEventListener("click", () => openDrawer(b.dataset.open)));
+    // Dashboard: Contract ID opens the Contracts page filtered to that contract
+    $$("[data-goto]", root).forEach(b => b.addEventListener("click", () => {
+      const c = S.db.contracts.find(x => x.id === b.dataset.goto); if (!c) return;
+      const view = c.access_level === "Confidential" && can(3) ? "confidential" : "contracts";
+      S.search[view] = c.id; location.hash = "#/" + view; setTimeout(() => openDrawer(c.id), 0);
+    }));
     $$("[data-dash]", root).forEach(s => s.addEventListener("change", () => { S.dash[s.dataset.dash] = s.value; render(); }));
     $$("[data-col-filter]", root).forEach(s => s.addEventListener("change", () => { S.filters[s.dataset.viewName][s.dataset.colFilter] = s.value; render(); }));
     $$("[data-clear-filters]", root).forEach(b => b.addEventListener("click", () => { S.filters[b.dataset.clearFilters] = {}; render(); }));
