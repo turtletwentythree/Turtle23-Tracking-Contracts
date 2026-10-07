@@ -73,7 +73,12 @@
     // Demo: attachments stay in this browser tab only (nothing is uploaded)
     async uploadAttachment(path, file) { (this.files = this.files || {})[path] = file; return { path, demo: true }; }
     async signedUrl(path) { const f = (this.files || {})[path]; return f ? URL.createObjectURL(f) : ""; }
-    async downloadAttachment(path) { const f = (this.files || {})[path]; if (!f) throw new Error("ไฟล์ตัวอย่างนี้ไม่ได้อยู่ในแท็บนี้แล้ว"); return f; }
+    // Demo: nothing is sent; the request is kept so the page can be checked
+    async sendEmail(payload) {
+      (this.outbox = this.outbox || {});
+      if (this.outbox[payload.requestId]) return { ...this.outbox[payload.requestId], duplicate: true };
+      return (this.outbox[payload.requestId] = { success: true, state: "done", sent: true, demo: true, sentAt: new Date().toISOString() });
+    }
     // Admins (Level 4-5) who approve Due Date requests
     async approvers() { return this.db.user_access.filter(u => u.active !== false && (u.role === "admin" || u.role === "root")).map(u => ({ email: u.email, display_name: u.display_name })); }
     async update(table, key, patch) {
@@ -287,7 +292,6 @@
       }));
       return out;
     }
-    // The signed-in user's session token: the Apps Script endpoint checks it with Supabase before sending email
     async accessToken() { const { data } = await this.client.auth.getSession(); return data.session?.access_token || ""; }
     // Attachments live in the private Storage bucket "attachments" (011_storage_attachments.sql).
     // Storage itself refuses files over 20 MB or of other types; links are signed and expire after 5 minutes.
@@ -301,10 +305,14 @@
       if (error) throw new Error(/not found/i.test(error.message) ? "ไม่พบไฟล์ หรือบัญชีนี้ไม่มีสิทธิ์เปิดไฟล์นี้" : error.message);
       return data.signedUrl;
     }
-    async downloadAttachment(path) {
-      const { data, error } = await this.client.storage.from(BUCKET).download(path);
-      if (error) throw new Error(error.message);
-      return data;
+    // Status email through the Edge Function "send-email" (012_email_outbox.sql + supabase/functions/send-email)
+    async sendEmail(payload) {
+      const { data, error } = await this.client.functions.invoke("send-email", { body: payload });
+      if (!error) return data;
+      let message = error.message;
+      try { const j = await error.context.json(); message = j.error || message; } catch (e) { /* no JSON reply */ }
+      if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้งระบบส่งอีเมล (Edge Function send-email) หรือเชื่อมต่อไม่ได้: ${message}`;
+      throw new Error(message);
     }
     async approvers() {
       const { data, error } = await this.client.rpc("approver_emails");

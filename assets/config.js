@@ -8,8 +8,6 @@ window.APP_CONFIG = {
   // Users may sign in with a short username; it is turned into <username>@<EMAIL_DOMAIN>.
   EMAIL_DOMAIN: "turtle23.com",
   // Sign-in is through Microsoft 365. Set true only if you also create email/password users in Supabase.
-  ALLOW_PASSWORD_LOGIN: false,
-  // Google Apps Script web app (apps-script/Code.gs) that sends status emails through Gmail (attachments are in Supabase Storage).
-  // On GitHub Pages this comes from the APPS_SCRIPT_URL repository secret. Empty = attachments and email are off.
-  APPS_SCRIPT_URL: ""
+  ALLOW_PASSWORD_LOGIN: false
+  // Status emails go through the Supabase Edge Function "send-email"; its keys are Supabase secrets, never here.
 };

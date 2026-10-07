@@ -28,7 +28,7 @@ $$;
 
 drop policy if exists attachments_insert on storage.objects;
 create policy attachments_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'attachments' and public.has_level(2) and name ~ '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$');
+  with check (bucket_id = 'attachments' and public.has_level(2) and name ~ '^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$');
 
 drop policy if exists attachments_read on storage.objects;
 create policy attachments_read on storage.objects for select to authenticated

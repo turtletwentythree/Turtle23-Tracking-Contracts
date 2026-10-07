@@ -1153,7 +1153,6 @@
     pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
   const storageFolder = id => String(id || "unassigned").replace(/[^A-Za-z0-9._-]/g, "_");
   const randomId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
-  const fileCache = new Map(); // path -> File picked in this tab, so the email can attach it without downloading it again
   async function uploadAttach(key, contractId) {
     const items = attachItems(key);
     for (const it of items) {
@@ -1162,7 +1161,6 @@
       const mimeType = ATTACH_MIME[it.ext], path = `${storageFolder(contractId)}/${randomId()}.${it.ext}`;
       try {
         await window.Store.uploadAttachment(path, it.file, mimeType);
-        fileCache.set(path, it.file);
         it.result = { path, fileName: it.file.name, fileSize: it.file.size, mimeType, uploadedBy: S.user.email || S.user.username || "",
           uploadedAt: new Date().toISOString(), status: "Uploaded" };
         it.status = "Uploaded";
@@ -1179,12 +1177,12 @@
     try { await fn(); } finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = html; } }
   }
 
-  // ───────────── Status email (sent by Apps Script) ─────────────
+  // ───────────── Status email (sent by the send-email Edge Function) ─────────────
   const EMAIL_OK = e => /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(e);
   const personEmail = name => (S.db.people.find(p => p.name === name)?.email || "").toLowerCase();
   const systemUrl = () => location.origin + location.pathname;
   const contractUrl = c => `${systemUrl()}#/${c.access_level === "Confidential" ? "confidential" : "contracts"}/${encodeURIComponent(c.id)}`;
-  const EMAIL_ATTACH_BYTES = 15 * 1024 * 1024; // larger totals go as links to the system (Gmail allows 25 MB after encoding)
+  const EMAIL_ATTACH_BYTES = 15 * 1024 * 1024; // larger totals go as a link to the system (the function decides; this is the hint)
   function caseEmail({ c, action, actionTh, from, toName, reasonLabel, reason, extra = [], files = [] }) {
     const st = contractState(c), L = [];
     const row = (en, th, v) => L.push(`${en} / ${th}: ${v || "-"}`);
@@ -1208,7 +1206,7 @@
   }
 
   // Send Status Update Email: To, CC, Subject, Message, Attachments. Saving already happened; this only sends.
-  // Retry keeps the same requestId, so the Apps Script never sends the same email twice and no Log is added.
+  // Retry keeps the same requestId, so the email function never sends the same email twice and no Log is added.
   function openEmailModal(d) {
     const st = { to: (d.to || "").toLowerCase(), cc: [], requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
     (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && e !== st.to && !st.cc.includes(e)) st.cc.push(e); });
@@ -1231,7 +1229,6 @@
           ? `<p class="hint">Files total ${fmtSize(totalBytes)}, over 15 MB: the email carries a link to the system instead.<br>ไฟล์รวมเกิน 15 MB อีเมลจะส่งเป็นลิงก์เข้าระบบแทนการแนบไฟล์</p>` : ""}</div>
         <pre class="email-preview" data-em-preview></pre>
         <p class="attach-error" data-em-error></p>
-        ${ready ? "" : `<p class="attach-warn">ยังไม่ได้ตั้งค่า Apps Script จึงยังส่งอีเมลไม่ได้ ข้อมูลบันทึกแล้ว กด Cancel ได้</p>`}
         <div class="form-actions"><span class="email-status" data-em-status></span>
           <button class="btn" data-em-cancel>Cancel / ยกเลิก</button>
           <button class="btn btn-primary" data-em-send ${ready ? "" : "disabled"}>Send Email / ส่งอีเมล</button></div>
@@ -1283,9 +1280,9 @@
       const payload = { requestId: st.requestId, contractId: d.contract.id, action: d.action, to, subject: st.subject, body: st.body,
         attachments: [], systemLink: contractUrl(d.contract) };
       if (st.cc.length) payload.cc = [...st.cc];
-      if (linksOnly) payload.attachmentLinks = files.map(f => ({ fileName: f.fileName, fileSize: f.fileSize }));
+      payload.kind = d.kind;
+      payload.attachments = files.filter(f => f.path).map(f => ({ path: f.path, fileName: f.fileName }));
       try {
-        if (files.length && !linksOnly) payload.attachments = await emailAttachments(files);
         const r = await window.Mailer.sendEmail(payload);
         st.sent = true;
         status.className = "email-status ok"; status.textContent = r.demo ? "Demo: ไม่ได้ส่งจริง" : "Sent / ส่งแล้ว";
@@ -1302,15 +1299,6 @@
     });
     chips();
     return root;
-  }
-  // Copies of the stored files for the email (Base64). Files picked in this tab are read locally; others are downloaded.
-  async function emailAttachments(files) {
-    const out = [];
-    for (const f of files) {
-      const blob = fileCache.get(f.path) || await window.Store.downloadAttachment(f.path);
-      out.push({ fileName: f.fileName, mimeType: f.mimeType, fileSize: f.fileSize, base64: await window.Mailer.blobToBase64(blob) });
-    }
-    return out;
   }
   async function logEmail(d, st, files, status, error) {
     try {
