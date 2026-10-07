@@ -46,12 +46,9 @@ supabase functions deploy send-email --no-verify-jwt
 ตรวจ: Supabase → **Edge Functions** ต้องเห็น `send-email` · ลองส่งอีเมลจากเว็บ แล้วดู **Logs** ของฟังก์ชัน และตาราง `email_outbox`
 
 ## ใช้ Microsoft 365 ส่งแทน Resend (ไม่ต้องแก้ DNS)
-ต้องมี Entra App ที่ได้สิทธิ์ **Mail.Send (Application)** และ Admin consent แล้ว จากนั้น:
-```bash
-supabase secrets set EMAIL_PROVIDER=graph MS_TENANT_ID=<tenant id> MS_CLIENT_ID=<client id> MS_CLIENT_SECRET=<client secret> MS_SENDER=contract@turtle23.com
-supabase functions deploy send-email --no-verify-jwt
-```
-ข้อจำกัด: Microsoft Graph แนบไฟล์ได้รวมประมาณ 3 MB ต่อฉบับ ถ้าเกินจะส่งเป็นลิงก์เข้าระบบแทน
+ดูขั้นตอนเต็มใน `MS365-SETUP-TH.md` ในโฟลเดอร์นี้ (ต้องให้ Microsoft 365 Admin สร้าง Entra App ที่มีสิทธิ์ Mail.Send) แล้วตั้ง
+`EMAIL_PROVIDER=graph`, `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_SENDER` แทน `RESEND_API_KEY`
+ไฟล์แนบรวมได้ถึง 15 MB เหมือน Resend (ไฟล์ใหญ่ส่งผ่าน upload session ของ Microsoft)
 
 ## ไม่ต้องใช้แล้ว
 - GitHub Secret `APPS_SCRIPT_URL` ลบได้ (GitHub → Settings → Secrets and variables → Actions)

@@ -1,6 +1,7 @@
 // Supabase Edge Function "send-email". Deploy: supabase functions deploy send-email --no-verify-jwt
 // (the session is checked inside, which also works with the new publishable / secret API keys).
-// Secrets: EMAIL_FROM, RESEND_API_KEY (or EMAIL_PROVIDER=graph + MS_*), optional SITE_URL, ALLOWED_ORIGIN, MAX_ATTACH_MB.
+// Secrets: EMAIL_FROM + RESEND_API_KEY, or EMAIL_PROVIDER=graph + MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_SENDER;
+// optional SITE_URL, ALLOWED_ORIGIN, MAX_ATTACH_MB. Setup: README-TH.md (Resend) or MS365-SETUP-TH.md (Microsoft 365).
 // SUPABASE_URL and the project keys are provided by Supabase automatically.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { handle, HttpError } from "./handler.ts";

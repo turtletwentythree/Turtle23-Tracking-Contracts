@@ -39,13 +39,27 @@ export function resend(env: Env, http: typeof fetch = fetch): Provider {
   };
 }
 
-// Microsoft Graph sendMail: an Entra app with the Mail.Send application permission (admin consent),
-// MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, and MS_SENDER (the mailbox that sends, e.g. contract@turtle23.com)
+// Microsoft 365 through Microsoft Graph, sending as one company mailbox. Needs an Entra app with the
+// Mail.Send application permission (admin consent) and the secrets MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET.
+// The mailbox is MS_SENDER, or the address in EMAIL_FROM. No DNS change: Microsoft 365 already sends for the domain.
+// Without files: one sendMail call. With files: draft -> attachments (large ones in an upload session) -> send,
+// so up to 15 MB in total works (sendMail alone stops at about 4 MB).
+const GRAPH = "https://graph.microsoft.com/v1.0";
+const SMALL_ATTACHMENT = 3 * 1024 * 1024;
+const CHUNK = 10 * 320 * 1024; // upload chunks must be multiples of 320 KiB and under 4 MB
+export function graphSender(env: Env) {
+  const direct = String(env("MS_SENDER") || "").trim();
+  const fromAddr = (String(env("EMAIL_FROM") || "").match(/<([^>]+)>/)?.[1] || String(env("EMAIL_FROM") || "")).trim();
+  const sender = (direct || fromAddr).toLowerCase();
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(sender)) throw new Error("MS_SENDER (or EMAIL_FROM) must be the mailbox that sends, e.g. contract@turtle23.com");
+  return sender;
+}
 export function graph(env: Env, http: typeof fetch = fetch): Provider {
   return {
     name: "graph",
-    maxAttachBytes: 3 * 1024 * 1024, // one sendMail request is limited to about 4 MB
+    maxAttachBytes: 15 * 1024 * 1024,
     async send(m: Mail) {
+      const sender = graphSender(env);
       const tokenRes = await http(`https://login.microsoftonline.com/${encodeURIComponent(need(env, "MS_TENANT_ID"))}/oauth2/v2.0/token`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -54,18 +68,48 @@ export function graph(env: Env, http: typeof fetch = fetch): Provider {
       });
       if (!tokenRes.ok) throw new Error(`Microsoft sign-in ${tokenRes.status}: ${await failText(tokenRes)}`);
       const { access_token } = await tokenRes.json();
+      const auth = { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" };
+      const user = `${GRAPH}/users/${encodeURIComponent(sender)}`;
       const addr = (address: string) => ({ emailAddress: { address } });
-      const res = await http(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(need(env, "MS_SENDER"))}/sendMail`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ saveToSentItems: true, message: {
-          subject: m.subject, body: { contentType: "HTML", content: m.html },
-          toRecipients: [addr(m.to)], ccRecipients: m.cc.map(addr), ...(m.replyTo ? { replyTo: [addr(m.replyTo)] } : {}),
-          attachments: m.attachments.map(a => ({ "@odata.type": "#microsoft.graph.fileAttachment", name: a.fileName, contentType: a.mimeType, contentBytes: toBase64(a.content) }))
-        } })
-      });
-      if (res.status !== 202 && !res.ok) throw new Error(`Microsoft Graph ${res.status}: ${await failText(res)}`);
-      return { id: res.headers.get("request-id") || "" };
+      const message = {
+        subject: m.subject, body: { contentType: "HTML", content: m.html },
+        toRecipients: [addr(m.to)], ccRecipients: m.cc.map(addr), ...(m.replyTo ? { replyTo: [addr(m.replyTo)] } : {}),
+        internetMessageHeaders: [{ name: "X-T23-Request-Id", value: m.idempotencyKey }]
+      };
+      const call = async (url: string, init: RequestInit, what: string) => {
+        const res = await http(url, init);
+        if (!res.ok) throw new Error(`Microsoft Graph ${what} ${res.status}: ${await failText(res)}`);
+        return res;
+      };
+      if (!m.attachments.length) {
+        const res = await call(`${user}/sendMail`, { method: "POST", headers: auth, body: JSON.stringify({ message, saveToSentItems: true }) }, "sendMail");
+        return { id: res.headers.get("request-id") || "" };
+      }
+      const draft = await (await call(`${user}/messages`, { method: "POST", headers: auth, body: JSON.stringify(message) }, "draft")).json();
+      const msg = `${user}/messages/${encodeURIComponent(draft.id)}`;
+      try {
+        for (const a of m.attachments) {
+          if (a.content.length < SMALL_ATTACHMENT) {
+            await call(`${msg}/attachments`, { method: "POST", headers: auth, body: JSON.stringify({
+              "@odata.type": "#microsoft.graph.fileAttachment", name: a.fileName, contentType: a.mimeType, contentBytes: toBase64(a.content) }) }, "attachment");
+            continue;
+          }
+          const session = await (await call(`${msg}/attachments/createUploadSession`, { method: "POST", headers: auth, body: JSON.stringify({
+            AttachmentItem: { attachmentType: "file", name: a.fileName, size: a.content.length, contentType: a.mimeType } }) }, "upload session")).json();
+          for (let start = 0; start < a.content.length; start += CHUNK) {
+            const part = a.content.subarray(start, Math.min(start + CHUNK, a.content.length));
+            // The upload URL carries its own token: no Authorization header here
+            await call(session.uploadUrl, { method: "PUT", body: part as unknown as BodyInit, headers: {
+              "Content-Type": "application/octet-stream", "Content-Length": String(part.length),
+              "Content-Range": `bytes ${start}-${start + part.length - 1}/${a.content.length}` } }, "upload");
+          }
+        }
+        await call(`${msg}/send`, { method: "POST", headers: auth }, "send");
+      } catch (e) {
+        await http(msg, { method: "DELETE", headers: auth }).catch(() => {}); // leave no half-made draft behind
+        throw e;
+      }
+      return { id: String(draft.internetMessageId || draft.id || "") };
     }
   };
 }
