@@ -319,8 +319,8 @@
   }
 
   function renderNav() {
-    // Sidebar counts open contracts only; Completed and Cancelled are listed at the bottom of the page
-    const counts = { contracts: contractsFor("contracts").filter(isOpen).length, confidential: contractsFor("confidential").filter(isOpen).length };
+    // Sidebar counts every contract in the page (open, completed and cancelled), as the Production system does
+    const counts = { contracts: contractsFor("contracts").length, confidential: contractsFor("confidential").length };
     $("#nav").innerHTML = VIEWS.filter(v => can(v.min)).map(v => `
       <button class="nav-button ${S.view === v.id ? "active" : ""}" data-view="${v.id}" title="${esc(v.label)}">
         <span class="nav-icon">${v.icon}</span><span class="nav-label">${esc(v.label)}</span>
