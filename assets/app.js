@@ -114,11 +114,11 @@
   const alertTag = code => `<span class="tag status-dot ${ALERT_TAG[code]}">${ALERT_LABEL[code]}</span>`;
 
   function logsOf(id) { return S.db.contract_logs.filter(l => l.contract_id === id).sort((a, b) => a.log_no - b.log_no); }
-  // Newest log: Updated Date and Time, then Log No, then the order in the database
+  // Newest log: highest Log No (as the Production system does), then Updated Date and Time, then the order in the database
   function newer(a, b) {
+    if ((a.log_no || 0) !== (b.log_no || 0)) return (a.log_no || 0) > (b.log_no || 0);
     const ta = Date.parse(a.updated_at) || 0, tb = Date.parse(b.updated_at) || 0;
     if (ta !== tb) return ta > tb;
-    if ((a.log_no || 0) !== (b.log_no || 0)) return (a.log_no || 0) > (b.log_no || 0);
     return (Number(a.id) || 0) > (Number(b.id) || 0);
   }
   function latestLog(id) {
@@ -162,8 +162,10 @@
     // Alert: Days on Hand of the current Action vs Action SLA
     const forward = kind === "open" && FORWARD_ACTION.test(action);
     const inDate = (log && log.in_date) || c.station_in || null;
-    const onHand = forward || !inDate ? null : workdays(inDate, kind !== "open" ? end : (log && log.out_date) || today);
-    const aSla = kind === "open" && !forward ? actionSla(action) : null;
+    // The current Action is still on someone's desk while the case is open, so it counts to today even if an Out date was typed
+    const onHand = forward || !inDate ? null : workdays(inDate, end);
+    // Draft Created has no row in the Action SLA Master: it gets the contract's Total SLA (as the Production system does)
+    const aSla = kind === "open" && !forward ? (/^draft created$/i.test(action) && !(S.db.action_sla || []).some(r => /^draft created$/i.test(String(r.action || "").trim())) ? sla : actionSla(action)) : null;
     const alert = kind === "completed" ? "C" : kind === "cancelled" ? "X" : forward ? "U" : aSla == null || onHand == null ? "N"
       : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
     return { c, log, action, reason: (log && log.reason) || "", kind, closeDate, acc, used: acc, totalSla: sla, balance: sla == null ? null : sla - acc,
