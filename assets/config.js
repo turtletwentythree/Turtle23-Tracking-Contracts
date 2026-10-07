@@ -9,7 +9,7 @@ window.APP_CONFIG = {
   EMAIL_DOMAIN: "turtle23.com",
   // Sign-in is through Microsoft 365. Set true only if you also create email/password users in Supabase.
   ALLOW_PASSWORD_LOGIN: false,
-  // Google Apps Script web app (apps-script/Code.gs) that saves attachments to Google Drive and sends email.
+  // Google Apps Script web app (apps-script/Code.gs) that sends status emails through Gmail (attachments are in Supabase Storage).
   // On GitHub Pages this comes from the APPS_SCRIPT_URL repository secret. Empty = attachments and email are off.
   APPS_SCRIPT_URL: ""
 };

@@ -42,7 +42,8 @@ supabase/migrations/005_snapshot_import.sql  นำเข้า production_snaps
 supabase/migrations/007_log_view.sql    Log View: คอลัมน์ครบทุกช่องของ logs.csv และหัวตาราง Log View (log_view_columns)
 supabase/migrations/008_master_data.sql Master Data: Lock แถวที่แก้ไขเอง (Import ไม่เขียนทับ), ประวัติการแก้ไข (master_audit), กันลบแถวที่ยังถูกใช้
 supabase/migrations/009_log_edit.sql    Log View Detail แก้ไขได้ใน Master Data: Lock log ที่แก้ไขเอง (Import ไม่เขียนทับ) และเก็บประวัติ
-supabase/migrations/010_email_attachments.sql Attachments บน Google Drive และส่งอีเมลจริงผ่าน Apps Script: Attachment Required ต่อ Action, email_log, ผู้อนุมัติ Due Date (ตั้งค่าสคริปต์ดู apps-script/README-TH.md)
+supabase/migrations/010_email_attachments.sql ส่งอีเมลจริงผ่าน Apps Script (Gmail): Attachment Required ต่อ Action, email_log, ผู้อนุมัติ Due Date (ตั้งค่าสคริปต์ดู apps-script/README-TH.md)
+supabase/migrations/011_storage_attachments.sql ไฟล์แนบเก็บใน Supabase Storage (bucket ส่วนตัว attachments, 20 MB ต่อไฟล์, เฉพาะ PDF/Word/Excel/PowerPoint/JPG/PNG) ไม่ใช้ Google Drive
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```
 

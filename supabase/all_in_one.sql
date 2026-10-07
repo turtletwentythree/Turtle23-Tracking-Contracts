@@ -1,4 +1,4 @@
--- All migrations 001-010 in one file: paste into Supabase SQL Editor and click Run (run once on an empty project).
+-- All migrations 001-011 in one file: paste into Supabase SQL Editor and click Run (run once on an empty project).
 
 -- ===== migrations/001_schema.sql =====
 -- Contract Tracking System — Supabase schema
@@ -1471,7 +1471,7 @@ revoke all on function public.import_snapshot(jsonb) from public, anon;
 grant execute on function public.import_snapshot(jsonb) to authenticated;
 
 -- ===== migrations/010_email_attachments.sql =====
--- 010: Attachments on Google Drive and real email from User Case Action (via the Apps Script web app)
+-- 010: Real email from User Case Action (via the Apps Script web app, Gmail); attachments are in Storage (011)
 -- Safe to run more than once. Adds columns and one table; no existing data is changed or removed.
 --   * action_sla.attachment_required: Attachment Configuration per Action (Resubmit is always optional in the app)
 --   * due_date_requests: requester email, decision remark and supporting documents
@@ -1522,3 +1522,45 @@ drop policy if exists logs_update on public.contract_logs;
 create policy logs_update on public.contract_logs for update
   using (public.has_level(2) and exists (select 1 from public.contracts c where c.id = contract_id))
   with check (public.has_level(2) and exists (select 1 from public.contracts c where c.id = contract_id));
+
+-- ===== migrations/011_storage_attachments.sql =====
+-- 011: Attachments in Supabase Storage (replaces Google Drive)
+-- Safe to run more than once. Creates one private bucket and its access rules; no table data is changed.
+--   * Bucket "attachments" is private: files open only through short-lived signed links made in the app
+--   * Storage itself refuses files over 20 MB and types other than PDF, Word, Excel, PowerPoint, JPG, PNG
+--   * Files sit under <Contract ID>/<random id>.<ext>; the original file name is kept in the Log (attachments JSON)
+--   * Level 2+ can upload; a file can be opened only by someone who can see its contract
+--     (Confidential contracts stay hidden from levels that cannot see them); Level 4+ can delete
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('attachments', 'attachments', false, 20971520, array[
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'image/jpeg',
+  'image/png'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+-- The folder name is the Contract ID with anything outside A-Z a-z 0-9 . _ - replaced by "_" (same rule as the app)
+create or replace function public.attachment_contract_visible(object_name text)
+returns boolean language sql stable set search_path = public as $$
+  select exists (select 1 from public.contracts c
+    where regexp_replace(c.id, '[^A-Za-z0-9._-]', '_', 'g') = split_part(object_name, '/', 1))
+$$;
+
+drop policy if exists attachments_insert on storage.objects;
+create policy attachments_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'attachments' and public.has_level(2) and name ~ '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$');
+
+drop policy if exists attachments_read on storage.objects;
+create policy attachments_read on storage.objects for select to authenticated
+  using (bucket_id = 'attachments' and public.has_level(2)
+    and (public.has_level(4) or public.attachment_contract_visible(name) or owner = auth.uid()));
+
+drop policy if exists attachments_delete on storage.objects;
+create policy attachments_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'attachments' and public.has_level(4));

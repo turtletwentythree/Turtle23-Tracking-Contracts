@@ -294,6 +294,26 @@
     $("#pageHeading").textContent = v.title;
     $("#pageSubheading").textContent = v.id === "dashboard" ? `As of Date ${todayISO()}` : v.sub || "";
     render();
+    openLinkedContract();
+  }
+  // Email links point to #/contracts/<Contract ID> (or #/confidential/...): the page opens that contract's drawer,
+  // where the Log and its attachments are. The link survives the Microsoft sign-in (kept in sessionStorage).
+  const LINK_KEY = "t23-open-contract";
+  function rememberLinkedContract() {
+    const m = location.hash.match(/^#\/(?:contracts|confidential)\/([\w.-]+)/);
+    if (m) try { sessionStorage.setItem(LINK_KEY, decodeURIComponent(m[1])); } catch (e) { /* private mode */ }
+  }
+  function openLinkedContract() {
+    rememberLinkedContract();
+    let id = ""; try { id = sessionStorage.getItem(LINK_KEY) || ""; sessionStorage.removeItem(LINK_KEY); } catch (e) { return; }
+    if (!id) return;
+    const c = S.db.contracts.find(x => x.id === id);
+    if (!c) return toast("ไม่พบสัญญานี้ หรือบัญชีนี้ไม่มีสิทธิ์ดู", true);
+    const view = c.access_level === "Confidential" && can(3) ? "confidential" : "contracts";
+    S.search[view] = c.id;
+    if (S.view !== view || !location.hash.startsWith(`#/${view}`)) { history.replaceState(null, "", `#/${view}`); S.view = view; renderNav(); render(); }
+    else history.replaceState(null, "", `#/${view}`);
+    setTimeout(() => openDrawer(c.id), 0);
   }
 
   function renderNav() {
@@ -643,16 +663,31 @@
   }
 
   // ───────────── Contract detail drawer ─────────────
-  // Attachments of a log (from the Production Snapshot): each link opens the file in Google Drive,
-  // or its Drive folder when the snapshot has no link to the file itself
+  // Attachments of a log. Files added in this system are in Supabase Storage ({ path }) and open through a
+  // short-lived signed link made when clicked. Files from the Production Snapshot keep their Google Drive link.
   const safeUrl = u => { try { const x = new URL(u); return x.protocol === "https:" && /(^|\.)google\.com$/.test(x.hostname) ? x.href : ""; } catch (e) { return ""; } };
   function logFiles(l) {
-    const files = lf(l, "attachments").map(a => {
+    const list = Array.isArray(l) ? l : lf(l, "attachments");
+    const stored = list.filter(a => a && a.path).map(a => `<button type="button" class="log-file" data-file-path="${esc(a.path)}" data-file-name="${esc(a.fileName || "File")}"
+      title="เปิดไฟล์ (${esc(fmtSize(a.fileSize))})">📎 ${esc(a.fileName || "File")}</button>`);
+    const linked = list.filter(a => a && !a.path).map(a => {
       const file = safeUrl(a.url || a.downloadUrl);
       return { name: a.originalFileName || a.fileName || "File", url: file || safeUrl(a.cloudFolderUrl), folder: !file };
-    }).filter(a => a.url);
-    return files.length ? `<div class="log-files">${files.map(f => `<a class="log-file" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"
-      title="${f.folder ? "เปิดโฟลเดอร์ใน Google Drive" : "เปิดไฟล์ใน Google Drive"}">${f.folder ? "📁" : "📎"} ${esc(f.name)}</a>`).join("")}</div>` : "";
+    }).filter(a => a.url).map(f => `<a class="log-file" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"
+      title="${f.folder ? "เปิดโฟลเดอร์ใน Google Drive" : "เปิดไฟล์ใน Google Drive"}">${f.folder ? "📁" : "📎"} ${esc(f.name)}</a>`);
+    const all = [...stored, ...linked];
+    return all.length ? `<div class="log-files">${all.join("")}</div>` : "";
+  }
+  // The tab is opened right away (before the link exists) so the browser does not block it as a pop-up
+  async function openStoredFile(path, name, download) {
+    const tab = download ? null : window.open("", "_blank");
+    if (tab) { tab.opener = null; tab.document.title = name || "File"; tab.document.body.textContent = "กำลังเปิดไฟล์..."; }
+    try {
+      const url = await window.Store.signedUrl(path, download ? name : undefined);
+      if (!url) throw new Error("ไม่พบไฟล์");
+      if (tab) tab.location.replace(url);
+      else { const a = document.createElement("a"); a.href = url; a.download = name || ""; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); }
+    } catch (e) { if (tab) tab.close(); toast(`เปิดไฟล์ไม่สำเร็จ: ${e.message}`, true); }
   }
   function openDrawer(id) {
     const c = S.db.contracts.find(x => x.id === id);
@@ -985,7 +1020,7 @@
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-due-submit ${c ? "" : "disabled"}>Submit Request / ส่งคำขอ</button></div>
         ${mine.length ? `<div><p class="section-title">คำขอล่าสุด</p><div class="table-wrap"><table class="grid compact"><thead><tr><th>#</th><th>Contract</th><th>Requested</th><th>Reason</th><th>By</th><th>Status</th></tr></thead><tbody>
-          ${mine.map(r => `<tr><td>${r.id}</td><td>${esc(r.contract_id)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}</td><td>${esc(r.requested_by)}</td><td>${reqTag(r.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+          ${mine.map(r => `<tr><td>${r.id}</td><td>${esc(r.contract_id)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}${logFiles(Array.isArray(r.attachments) ? r.attachments : [])}</td><td>${esc(r.requested_by)}</td><td>${reqTag(r.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
       </div></section>`;
   }
   const reqTag = s => `<span class="tag ${s === "Approved" ? "tag-green" : s === "Rejected" ? "tag-red" : "tag-amber"}">${esc(s)}</span>`;
@@ -1018,9 +1053,9 @@
     });
   }
 
-  // ───────────── Attachments (Google Drive via Apps Script) ─────────────
-  // One "Attach Files" button per form, plus drag and drop. Files go to Drive when the form is saved,
-  // and the Log keeps each file's own link (fileId, url, downloadUrl), never a folder link.
+  // ───────────── Attachments (Supabase Storage) ─────────────
+  // One "Attach Files" button per form, plus drag and drop. Files go to the private Storage bucket when the form
+  // is saved, and the Log keeps each file's record (path, name, size, type, who, when). No Google Drive.
   const ATTACH_MAX = 10, ATTACH_BYTES = 20 * 1024 * 1024;
   const ATTACH_EXT = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "jpg", "jpeg", "png"];
   const attachItems = key => (S.attach[key] = S.attach[key] || []);
@@ -1034,7 +1069,7 @@
     return { required: Boolean((S.db.action_sla || []).find(a => a.action === action)?.attachment_required) };
   }
   const attachHelp = rule => rule.resubmit ? ["Optional for Resubmit.", "ไม่บังคับแนบไฟล์สำหรับการส่งกลับเข้าตรวจ"]
-    : ["Up to 10 files · 20 MB per file · PDF, Word, Excel, PowerPoint, JPG, PNG", "สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 20 MB · ระบบอัปโหลดขึ้น Google Drive เมื่อกดบันทึก"];
+    : ["Up to 10 files · 20 MB per file · PDF, Word, Excel, PowerPoint, JPG, PNG", "สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 20 MB · ระบบเก็บไฟล์ในระบบเมื่อกดบันทึก"];
   function attachBox(key, rule) {
     const [en, th] = attachHelp(rule);
     return `<div class="field full attach-box${rule.required ? " is-required" : ""}" data-attach="${key}" tabindex="-1">
@@ -1044,7 +1079,6 @@
       <p class="hint" data-attach-help>${esc(en)}<br>${esc(th)}</p>
       <ul class="attach-list" data-attach-list>${attachRows(key)}</ul>
       <p class="attach-error" data-attach-error></p>
-      ${window.Mailer.configured() ? "" : `<p class="attach-warn">ยังไม่ได้ตั้งค่า Apps Script จึงยังอัปโหลดไฟล์และส่งอีเมลไม่ได้</p>`}
     </div>`;
   }
   function attachRows(key) {
@@ -1084,7 +1118,7 @@
       if (file.size > ATTACH_BYTES) return problems.push(`${file.name}: ใหญ่เกิน 20 MB`);
       if (!file.size) return problems.push(`${file.name}: ไฟล์ว่าง`);
       if (items.some(it => it.file.name === file.name && it.file.size === file.size)) return problems.push(`${file.name}: แนบไฟล์นี้แล้ว`);
-      items.push({ file, status: "Ready", requestId: window.Mailer.newId("UP") });
+      items.push({ file, ext, status: "Ready" });
     });
     attachError(key, problems.join(" · "), problems.length ? "ไฟล์ข้างต้นไม่ได้ถูกเพิ่ม" : "");
     drawAttach(key);
@@ -1109,25 +1143,33 @@
       const box = $(`[data-attach="${key}"]`); box?.scrollIntoView({ behavior: "smooth", block: "center" }); box?.focus();
       return false;
     }
-    if (attachItems(key).length && !window.Mailer.configured()) { toast("ยังไม่ได้ตั้งค่า Apps Script จึงอัปโหลดไฟล์ไม่ได้", true); return false; }
     attachError(key);
     return true;
   }
-  // Upload whatever is not on Drive yet (a retry skips files already uploaded). Throws if any file fails,
-  // so nothing is saved until every file has its own Drive link.
+  // Upload whatever is not in Storage yet (a retry skips files already uploaded). Throws if any file fails,
+  // so nothing is saved until every file is stored. The path never contains the user's file name.
+  const ATTACH_MIME = { pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
+  const storageFolder = id => String(id || "unassigned").replace(/[^A-Za-z0-9._-]/g, "_");
+  const randomId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+  const fileCache = new Map(); // path -> File picked in this tab, so the email can attach it without downloading it again
   async function uploadAttach(key, contractId) {
     const items = attachItems(key);
     for (const it of items) {
       if (it.result) continue;
       it.status = "Uploading..."; it.error = ""; drawAttach(key);
-      try { it.result = await window.Mailer.uploadFile(it, contractId); it.status = "Uploaded"; }
-      catch (e) { it.status = "Failed"; it.error = e.message; drawAttach(key); throw new Error(`อัปโหลดไม่สำเร็จ: ${it.file.name} (${e.message})`); }
+      const mimeType = ATTACH_MIME[it.ext], path = `${storageFolder(contractId)}/${randomId()}.${it.ext}`;
+      try {
+        await window.Store.uploadAttachment(path, it.file, mimeType);
+        fileCache.set(path, it.file);
+        it.result = { path, fileName: it.file.name, fileSize: it.file.size, mimeType, uploadedBy: S.user.email || S.user.username || "",
+          uploadedAt: new Date().toISOString(), status: "Uploaded" };
+        it.status = "Uploaded";
+      } catch (e) { it.status = "Failed"; it.error = e.message; drawAttach(key); throw new Error(`อัปโหลดไม่สำเร็จ: ${it.file.name} (${e.message})`); }
       drawAttach(key);
     }
-    return items.map(it => ({
-      fileId: it.result.fileId, fileName: it.result.fileName, mimeType: it.result.mimeType, fileSize: it.result.fileSize,
-      url: it.result.url, downloadUrl: it.result.downloadUrl, uploadedBy: it.result.uploadedBy, uploadedAt: it.result.uploadedAt, status: it.result.status || "Uploaded"
-    }));
+    return items.map(it => ({ ...it.result }));
   }
   // Button stays disabled (and says what it is doing) until the whole save finishes: no double submit
   async function busy(btn, label, fn) {
@@ -1141,6 +1183,8 @@
   const EMAIL_OK = e => /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(e);
   const personEmail = name => (S.db.people.find(p => p.name === name)?.email || "").toLowerCase();
   const systemUrl = () => location.origin + location.pathname;
+  const contractUrl = c => `${systemUrl()}#/${c.access_level === "Confidential" ? "confidential" : "contracts"}/${encodeURIComponent(c.id)}`;
+  const EMAIL_ATTACH_BYTES = 15 * 1024 * 1024; // larger totals go as links to the system (Gmail allows 25 MB after encoding)
   function caseEmail({ c, action, actionTh, from, toName, reasonLabel, reason, extra = [], files = [] }) {
     const st = contractState(c), L = [];
     const row = (en, th, v) => L.push(`${en} / ${th}: ${v || "-"}`);
@@ -1155,10 +1199,11 @@
     if (reason) L.push("", `${reasonLabel || "Action Reason / เหตุผล"}:`, reason);
     if (files.length) {
       L.push("", "Attachments / ไฟล์แนบ");
-      files.forEach((f, i) => L.push(`${i + 1}. ${f.fileName}${f.downloadUrl ? `\n   Download: ${f.downloadUrl}` : ""}`));
+      files.forEach((f, i) => L.push(`${i + 1}. ${f.fileName} (${fmtSize(f.fileSize)})`));
+      L.push(`Open in system / เปิดไฟล์ในระบบ: ${contractUrl(c)}`);
     }
     L.push("", "Please review and proceed accordingly. / กรุณาตรวจสอบและดำเนินการตามขั้นตอน", "",
-      `System Link / ลิงก์เข้าสู่ระบบ: ${systemUrl()}`, "", "Contract Tracking System");
+      `System Link / ลิงก์เข้าสู่ระบบ: ${contractUrl(c)}`, "", "Contract Tracking System");
     return { subject: `[Contract Tracking] ${action}: ${c.id} - ${c.name}`, body: L.join("\n") };
   }
 
@@ -1169,6 +1214,8 @@
     (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && e !== st.to && !st.cc.includes(e)) st.cc.push(e); });
     const files = d.files || [];
     const ready = window.Mailer.configured();
+    const totalBytes = files.reduce((n, f) => n + (Number(f.fileSize) || 0), 0);
+    const linksOnly = files.length > 0 && totalBytes > EMAIL_ATTACH_BYTES;
     const root = openModal("emailRoot", d.title || "Send Status Update Email", `${d.contract.id} · ${d.action}`, `
       <div class="email-form">
         <div class="field"><label>To / ถึง <span class="req">*</span></label><input class="input" type="email" id="emTo" value="${esc(st.to)}" placeholder="receiver@turtle23.com"></div>
@@ -1180,7 +1227,8 @@
         <div class="field"><label>Message / ข้อความ</label><textarea class="input" rows="12" id="emBody">${esc(d.body)}</textarea></div>
         <div class="field"><label>Attachments / ไฟล์แนบ</label><ul class="attach-list">${files.length
           ? files.map(f => `<li><span class="attach-name">📄 ${esc(f.fileName)}</span><span class="muted small">${fmtSize(f.fileSize)}</span></li>`).join("")
-          : `<li class="attach-empty">-</li>`}</ul></div>
+          : `<li class="attach-empty">-</li>`}</ul>${linksOnly
+          ? `<p class="hint">Files total ${fmtSize(totalBytes)}, over 15 MB: the email carries a link to the system instead.<br>ไฟล์รวมเกิน 15 MB อีเมลจะส่งเป็นลิงก์เข้าระบบแทนการแนบไฟล์</p>` : ""}</div>
         <pre class="email-preview" data-em-preview></pre>
         <p class="attach-error" data-em-error></p>
         ${ready ? "" : `<p class="attach-warn">ยังไม่ได้ตั้งค่า Apps Script จึงยังส่งอีเมลไม่ได้ ข้อมูลบันทึกแล้ว กด Cancel ได้</p>`}
@@ -1193,7 +1241,7 @@
       const body = $("#emBody", root).value.trim();
       $("[data-em-preview]", root).textContent = [`To: ${$("#emTo", root).value.trim() || "-"}`, `CC: ${st.cc.length ? st.cc.join(", ") : "-"}`,
         `Subject: ${$("#emSubject", root).value.trim() || "-"}`, `Message: ${body.split("\n")[0].slice(0, 120)}${body.length > 120 ? " ..." : ""}`,
-        `Attachments: ${files.length ? `${files.length} file${files.length > 1 ? "s" : ""}` : "-"}`].join("\n");
+        `Attachments: ${files.length ? `${files.length} file${files.length > 1 ? "s" : ""}${linksOnly ? " (link to system)" : ""}` : "-"}`].join("\n");
     };
     const chips = () => {
       $("[data-em-chips]", root).innerHTML = st.cc.map((e, i) => `<span class="cc-chip" title="${esc(e)}">${esc(e)}<button type="button" data-em-del="${i}" aria-label="Remove">×</button></span>`).join("");
@@ -1233,9 +1281,11 @@
       if (!st.subject) { err("Subject is required.", "กรุณากรอกหัวเรื่อง"); return; }
       err(); st.sending = true; btn.disabled = true; btn.textContent = "Sending..."; status.className = "email-status"; status.textContent = "";
       const payload = { requestId: st.requestId, contractId: d.contract.id, action: d.action, to, subject: st.subject, body: st.body,
-        attachments: files.filter(f => f.fileId).map(f => ({ fileId: f.fileId })) };
+        attachments: [], systemLink: contractUrl(d.contract) };
       if (st.cc.length) payload.cc = [...st.cc];
+      if (linksOnly) payload.attachmentLinks = files.map(f => ({ fileName: f.fileName, fileSize: f.fileSize }));
       try {
+        if (files.length && !linksOnly) payload.attachments = await emailAttachments(files);
         const r = await window.Mailer.sendEmail(payload);
         st.sent = true;
         status.className = "email-status ok"; status.textContent = r.demo ? "Demo: ไม่ได้ส่งจริง" : "Sent / ส่งแล้ว";
@@ -1253,11 +1303,20 @@
     chips();
     return root;
   }
+  // Copies of the stored files for the email (Base64). Files picked in this tab are read locally; others are downloaded.
+  async function emailAttachments(files) {
+    const out = [];
+    for (const f of files) {
+      const blob = fileCache.get(f.path) || await window.Store.downloadAttachment(f.path);
+      out.push({ fileName: f.fileName, mimeType: f.mimeType, fileSize: f.fileSize, base64: await window.Mailer.blobToBase64(blob) });
+    }
+    return out;
+  }
   async function logEmail(d, st, files, status, error) {
     try {
       await window.Store.insert("email_log", {
         request_id: st.requestId, kind: d.kind, contract_id: d.contract.id, log_id: d.logId || null, to_email: st.to || null, cc: st.cc,
-        subject: st.subject || d.subject, attachments: files.map(f => ({ fileId: f.fileId, fileName: f.fileName })), status, error: error || null,
+        subject: st.subject || d.subject, attachments: files.map(f => ({ path: f.path, fileName: f.fileName, fileSize: f.fileSize })), status, error: error || null,
         sent_by: S.user.email || S.user.username || ""
       });
     } catch (e) { console.warn("email_log not saved (run 010_email_attachments.sql)", e); }
@@ -1534,7 +1593,7 @@
     <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Remark</th><th>Decision</th></tr></thead>
       <tbody>${pending.map(r => { const c = S.db.contracts.find(x => x.id === r.contract_id); return `<tr><td>${r.id}</td><td><button class="id-link" data-open="${esc(r.contract_id)}">${esc(r.contract_id)}</button></td>
-        <td>${fmtDate(c?.due_date)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}</td><td>${esc(r.requested_by)}</td>
+        <td>${fmtDate(c?.due_date)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}${logFiles(Array.isArray(r.attachments) ? r.attachments : [])}</td><td>${esc(r.requested_by)}</td>
         <td><input class="cell-input" type="date" value="${esc(r.requested_due)}" id="final-${r.id}"></td>
         <td><input class="cell-input" id="remark-${r.id}" placeholder="Approval Remark"></td>
         <td style="white-space:nowrap"><button class="btn btn-sm btn-green" data-approve="${r.id}">Approve</button> <button class="btn btn-sm btn-danger" data-reject="${r.id}">Reject</button></td></tr>`; }).join("")
@@ -1764,6 +1823,7 @@
 
   // ───────────── Boot ─────────────
   async function boot() {
+    rememberLinkedContract();
     await window.Store.init();
     initLogin();
     window.addEventListener("hashchange", () => { if (S.user) { closeDrawer(); ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); refreshIfStale().finally(route); } });
@@ -1775,6 +1835,11 @@
     $("#refreshBtn").addEventListener("click", () => guard(async () => { await reload(); renderNav(); render(); }, "รีเฟรชข้อมูลแล้ว"));
     $("#profileTrigger").addEventListener("click", e => { e.stopPropagation(); $("#profileDropdown").hidden = !$("#profileDropdown").hidden; });
     document.addEventListener("click", e => { if (!e.target.closest(".profile-menu")) $("#profileDropdown").hidden = true; });
+    // Stored attachments (Log View, drawer, Due Date requests): capture phase so row clicks underneath do not fire
+    document.addEventListener("click", e => {
+      const b = e.target.closest("[data-file-path]"); if (!b) return;
+      e.preventDefault(); e.stopPropagation(); openStoredFile(b.dataset.filePath, b.dataset.fileName, e.altKey);
+    }, true);
     document.addEventListener("click", e => { if (!e.target.closest("[data-filter-menu]")) $$("[data-filter-menu][open]").forEach(m => m.removeAttribute("open")); });
     document.addEventListener("keydown", e => {
       if (e.key !== "Escape") return;

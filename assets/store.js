@@ -11,6 +11,7 @@
   };
   // Loaded when the database has them (005, 007, 008); without them the app keeps working
   const OPTIONAL = ["contract_templates", "log_view_columns", "master_audit"];
+  const BUCKET = "attachments";
   // Master tables and logs that remember hand edits (008_master_data.sql, 009_log_edit.sql): locked rows are skipped by Import
   const TRACKED = ["departments", "people", "contract_types", "action_sla", "contract_templates", "log_view_columns", "contract_logs"];
   // A row's key as text; "section,key" style keys join their parts
@@ -69,6 +70,10 @@
       (this.db[table] = this.db[table] || []).push(r); this.persist(); return r;
     }
     async accessToken() { return ""; }
+    // Demo: attachments stay in this browser tab only (nothing is uploaded)
+    async uploadAttachment(path, file) { (this.files = this.files || {})[path] = file; return { path, demo: true }; }
+    async signedUrl(path) { const f = (this.files || {})[path]; return f ? URL.createObjectURL(f) : ""; }
+    async downloadAttachment(path) { const f = (this.files || {})[path]; if (!f) throw new Error("ไฟล์ตัวอย่างนี้ไม่ได้อยู่ในแท็บนี้แล้ว"); return f; }
     // Admins (Level 4-5) who approve Due Date requests
     async approvers() { return this.db.user_access.filter(u => u.active !== false && (u.role === "admin" || u.role === "root")).map(u => ({ email: u.email, display_name: u.display_name })); }
     async update(table, key, patch) {
@@ -282,8 +287,25 @@
       }));
       return out;
     }
-    // The signed-in user's session token: the Apps Script endpoint checks it with Supabase before uploading or emailing
+    // The signed-in user's session token: the Apps Script endpoint checks it with Supabase before sending email
     async accessToken() { const { data } = await this.client.auth.getSession(); return data.session?.access_token || ""; }
+    // Attachments live in the private Storage bucket "attachments" (011_storage_attachments.sql).
+    // Storage itself refuses files over 20 MB or of other types; links are signed and expire after 5 minutes.
+    async uploadAttachment(path, file, contentType) {
+      const { error } = await this.client.storage.from(BUCKET).upload(path, file, { contentType, upsert: false, cacheControl: "3600" });
+      if (error && !/exists|duplicate/i.test(error.message)) throw new Error(/bucket not found/i.test(error.message) ? "ยังไม่ได้รัน SQL 011_storage_attachments.sql" : error.message);
+      return { path };
+    }
+    async signedUrl(path, downloadName) {
+      const { data, error } = await this.client.storage.from(BUCKET).createSignedUrl(path, 300, downloadName ? { download: downloadName } : undefined);
+      if (error) throw new Error(/not found/i.test(error.message) ? "ไม่พบไฟล์ หรือบัญชีนี้ไม่มีสิทธิ์เปิดไฟล์นี้" : error.message);
+      return data.signedUrl;
+    }
+    async downloadAttachment(path) {
+      const { data, error } = await this.client.storage.from(BUCKET).download(path);
+      if (error) throw new Error(error.message);
+      return data;
+    }
     async approvers() {
       const { data, error } = await this.client.rpc("approver_emails");
       if (error) throw new Error(/approver_emails/.test(error.message) ? "ยังไม่ได้รัน SQL 010_email_attachments.sql" : error.message);

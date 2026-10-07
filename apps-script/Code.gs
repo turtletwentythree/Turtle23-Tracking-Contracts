@@ -1,26 +1,22 @@
 /**
- * T23 Contract Tracking: attachment upload + status email endpoint (Google Apps Script web app).
+ * T23 Contract Tracking: status email endpoint (Google Apps Script web app, Gmail only).
  *
- * The GitHub Pages site never talks to Google Drive or Gmail itself. It sends files (Base64) and
- * email drafts here; this script checks who is calling, saves files in Google Drive and sends the email.
+ * The GitHub Pages site never talks to Gmail itself. It sends the email draft here; this script checks who is
+ * calling and sends the email from the Google account that deployed it. No Google Drive is used:
+ * attachments live in Supabase Storage, and the website sends copies (Base64) with the email, or only links
+ * back to the system when the files are too large for Gmail.
  *
  * Script Properties (Project Settings > Script Properties). No password, token or key lives in the website.
- *   SUPABASE_URL          https://<project>.supabase.co                      (required)
+ *   SUPABASE_URL          https://<project>.supabase.co                           (required)
  *   SUPABASE_ANON_KEY     the Publishable / anon key (same one the website uses)  (required)
- *   ATTACHMENT_FOLDER_ID  Google Drive folder that receives attachments        (required)
- *   SHARE_MODE            recipients (default) | domain | anyone | none
- *                           recipients: To and CC are added as viewers of each file
- *                           domain:     anyone in the Google Workspace domain with the link
- *                           anyone:     anyone with the link (only if company policy allows)
- *   MAX_EMAIL_ATTACH_MB   total size attached to the email itself (default 20, Gmail limit is 25);
- *                         larger files are sent as Drive links only
+ *   MAX_EMAIL_ATTACH_MB   total size attached to one email (default 15; Gmail allows 25 MB after encoding);
+ *                         anything larger is replaced by a link to the system
  *   SENDER_NAME           display name of the sender (default "T23 Contract Tracking")
- *   LOG_SHEET_ID          optional Google Sheet that gets one row per upload/email
+ *   LOG_SHEET_ID          optional Google Sheet that gets one row per email
  *
  * Requests (POST, body = JSON text):
- *   { mode: "uploadFile", accessToken, requestId, contractId, file: { fileName, mimeType, fileSize, base64 } }
- *   { mode: "sendStatusEmail", accessToken, requestId, contractId, action, to, cc?, subject, body,
- *     attachments: [ { fileId } | { fileName, mimeType, base64 } ] }
+ *   { mode: "sendStatusEmail", accessToken, requestId, contractId, action, to, cc?, subject, body, systemLink?,
+ *     attachments: [ { fileName, mimeType, fileSize, base64 } ], attachmentLinks?: [ { fileName, fileSize } ] }
  * GET ?mode=health&callback=fn            -> is the endpoint configured
  * GET ?mode=status&requestId=..&callback  -> result of a request (used when the browser cannot read the POST reply)
  */
@@ -53,8 +49,7 @@ function doPost(e) {
     const caller = verifyCaller_(payload.accessToken);
     setResult_(requestId, { success: true, state: "processing" });
     let result;
-    if (payload.mode === "uploadFile") result = uploadFile_(payload, caller);
-    else if (payload.mode === "sendStatusEmail") result = sendStatusEmail_(payload, caller);
+    if (payload.mode === "sendStatusEmail") result = sendStatusEmail_(payload, caller);
     else throw new Error("Unknown mode.");
     result = Object.assign({ success: true, state: "done", requestId: requestId }, result);
     setResult_(requestId, result);
@@ -74,13 +69,13 @@ function doGet(e) {
     return jsonp_(id ? (cachedResult_(id) || { success: true, state: "pending" }) : { success: false, error: "Missing requestId." }, p.callback);
   }
   const props = PropertiesService.getScriptProperties();
-  const ready = Boolean(props.getProperty("SUPABASE_URL") && props.getProperty("SUPABASE_ANON_KEY") && props.getProperty("ATTACHMENT_FOLDER_ID"));
+  const ready = Boolean(props.getProperty("SUPABASE_URL") && props.getProperty("SUPABASE_ANON_KEY"));
   return jsonp_({ success: true, state: ready ? "ready" : "not-configured", service: "T23 Contract Tracking email endpoint" }, p.callback);
 }
 
 // ───────────── Who is calling ─────────────
 // The website passes the signed-in user's Supabase session token. Supabase confirms the token and returns the
-// user's Access Level; only Level 2 (Contract User) and up may upload files or send email.
+// user's Access Level; only Level 2 (Contract User) and up may send email.
 function verifyCaller_(token) {
   token = String(token || "");
   if (!token) throw new Error("Not signed in.");
@@ -100,40 +95,16 @@ function verifyCaller_(token) {
   return { email: String(me.email || JSON.parse(user.getContentText()).email || ""), name: String(me.display_name || "") };
 }
 
-// ───────────── Files ─────────────
-function uploadFile_(payload, caller) {
-  const f = payload.file || {};
-  const file = saveFile_(f, payload.contractId, caller);
-  log_(["upload", payload.requestId, payload.contractId, caller.email, file.fileName, file.fileSize, file.fileId]);
-  return { file: file };
-}
-
-function saveFile_(f, contractId, caller) {
-  const name = cleanFileName_(f.fileName);
-  const type = checkType_(name, f.mimeType);
-  if (!f.base64) throw new Error("Missing file data: " + name);
-  const bytes = Utilities.base64Decode(String(f.base64));
+// ───────────── Attachments ─────────────
+// Each attachment is checked again here (type by extension, 20 MB per file, at most 10) before it is attached.
+function attachmentBlob_(a) {
+  const name = cleanFileName_(a && a.fileName);
+  const type = checkType_(name, a && a.mimeType);
+  if (!a || !a.base64) throw new Error("Missing file data: " + name);
+  const bytes = Utilities.base64Decode(String(a.base64));
   if (!bytes.length) throw new Error("Empty file: " + name);
   if (bytes.length > MAX_FILE_BYTES) throw new Error("File is over 20 MB: " + name);
-  const folder = contractFolder_(contractId);
-  const driveFile = folder.createFile(Utilities.newBlob(bytes, type, name));
-  driveFile.setDescription("Contract " + cleanText_(contractId) + " · uploaded by " + caller.email);
-  return describe_(driveFile, caller.email, new Date().toISOString());
-}
-
-function describe_(file, uploadedBy, uploadedAt) {
-  const id = file.getId();
-  return {
-    fileId: id,
-    fileName: file.getName(),
-    mimeType: file.getMimeType(),
-    fileSize: file.getSize(),
-    url: "https://drive.google.com/file/d/" + id + "/view",
-    downloadUrl: "https://drive.google.com/uc?export=download&id=" + id,
-    uploadedBy: uploadedBy,
-    uploadedAt: uploadedAt,
-    status: "Uploaded"
-  };
+  return Utilities.newBlob(bytes, type, name);
 }
 
 function checkType_(name, mimeType) {
@@ -142,48 +113,6 @@ function checkType_(name, mimeType) {
   if (!allowed) throw new Error("File type not allowed: " + name);
   const type = String(mimeType || "").toLowerCase();
   return allowed.indexOf(type) >= 0 ? type : allowed[0];
-}
-
-// Files go to ATTACHMENT_FOLDER_ID / <Contract ID>
-function contractFolder_(contractId) {
-  const root = rootFolder_();
-  const name = cleanText_(contractId) || "Unassigned";
-  const existing = root.getFoldersByName(name);
-  return existing.hasNext() ? existing.next() : root.createFolder(name);
-}
-
-function rootFolder_() {
-  const id = PropertiesService.getScriptProperties().getProperty("ATTACHMENT_FOLDER_ID");
-  if (!id) throw new Error("Apps Script is not configured (ATTACHMENT_FOLDER_ID).");
-  return DriveApp.getFolderById(id);
-}
-
-// A file id from the website is only accepted if the file sits in the attachment folder tree,
-// so the endpoint can never be used to mail out other Drive files.
-function attachmentFileById_(fileId) {
-  const file = DriveApp.getFileById(cleanId_(fileId));
-  const rootId = rootFolder_().getId();
-  const parents = file.getParents();
-  while (parents.hasNext()) {
-    const parent = parents.next();
-    if (parent.getId() === rootId) return file;
-    const up = parent.getParents();
-    if (up.hasNext() && up.next().getId() === rootId) return file;
-  }
-  throw new Error("Attachment is not in the contract attachment folder.");
-}
-
-function share_(file, emails) {
-  const mode = String(PropertiesService.getScriptProperties().getProperty("SHARE_MODE") || "recipients").toLowerCase();
-  try {
-    if (mode === "anyone") file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    else if (mode === "domain") file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
-    else if (mode === "recipients") emails.forEach(function(email) {
-      try { file.addViewer(email); } catch (error) { console.warn("Could not share with " + email + ": " + message_(error)); }
-    });
-  } catch (error) {
-    console.warn("Sharing not changed: " + message_(error));
-  }
 }
 
 // ───────────── Email ─────────────
@@ -206,30 +135,26 @@ function sendStatusEmail_(payload, caller) {
       if (email !== to && cc.indexOf(email) < 0) cc.push(email);
     });
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-    if (attachments.length > MAX_FILES) throw new Error("Up to 10 files per email.");
+    const links = Array.isArray(payload.attachmentLinks) ? payload.attachmentLinks : [];
+    if (attachments.length > MAX_FILES || links.length > MAX_FILES) throw new Error("Up to 10 files per email.");
 
-    const files = [];
-    const newLinks = [];
-    attachments.forEach(function(a) {
-      if (a && a.fileId) { files.push(attachmentFileById_(a.fileId)); return; }
-      const saved = saveFile_(a || {}, payload.contractId, caller);
-      files.push(DriveApp.getFileById(saved.fileId));
-      newLinks.push(saved);
-    });
-    files.forEach(function(file) { share_(file, [to].concat(cc)); });
-
-    const limit = (Number(props.getProperty("MAX_EMAIL_ATTACH_MB")) || 20) * 1024 * 1024;
+    // Too large for Gmail: send no files, only their names and the link to the contract in the system
+    const limit = (Number(props.getProperty("MAX_EMAIL_ATTACH_MB")) || 15) * 1024 * 1024;
+    const blobs = attachments.map(attachmentBlob_);
     let total = 0;
-    const blobs = [];
-    files.forEach(function(file) {
-      const size = file.getSize();
-      if (total + size <= limit) { blobs.push(file.getBlob()); total += size; }
-    });
+    blobs.forEach(function(blob) { total += blob.getBytes().length; });
+    const asLinks = links.slice();
+    if (total > limit) {
+      blobs.forEach(function(blob) { asLinks.push({ fileName: blob.getName(), fileSize: blob.getBytes().length }); });
+      blobs.length = 0;
+    }
 
     let body = String(payload.body || "");
-    if (newLinks.length) {
-      body += "\n\nAttachments / ไฟล์แนบ";
-      newLinks.forEach(function(f, i) { body += "\n" + (i + 1) + ". " + f.fileName + "\n   Download: " + f.downloadUrl; });
+    const systemLink = safeLink_(payload.systemLink);
+    if (asLinks.length) {
+      body += "\n\nFiles are too large to attach. Open them in the system: / ไฟล์มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:";
+      asLinks.forEach(function(f, i) { body += "\n" + (i + 1) + ". " + cleanFileName_(f.fileName); });
+      if (systemLink) body += "\n" + systemLink;
     }
     const subject = String(payload.subject || "").replace(/[\r\n]+/g, " ").slice(0, 250) || "[Contract Tracking] Status Update";
     const options = {
@@ -246,11 +171,11 @@ function sendStatusEmail_(payload, caller) {
 
     const result = {
       sent: true, sentAt: new Date().toISOString(), to: to, cc: cc,
-      attachedFiles: blobs.length, linkedFiles: files.length, files: newLinks
+      attachedFiles: blobs.length, linkedFiles: asLinks.length
     };
     props.setProperty(sentKey, JSON.stringify(result));
     pruneSent_(props);
-    log_(["email", payload.requestId, payload.contractId, caller.email, to, cc.join(","), subject, files.length]);
+    log_(["email", payload.requestId, payload.contractId, caller.email, to, cc.join(","), subject, blobs.length, asLinks.length]);
     return result;
   } finally {
     lock.releaseLock();
@@ -289,6 +214,11 @@ function log_(row) {
   if (!id) return;
   try { SpreadsheetApp.openById(id).getSheets()[0].appendRow([new Date()].concat(row)); } catch (e) { console.warn("Log sheet: " + message_(e)); }
 }
+// Only https links back to the website are put in the email
+function safeLink_(v) {
+  const s = String(v || "").trim();
+  return /^https:\/\/[^\s<>"']{1,500}$/.test(s) ? s : "";
+}
 function cleanId_(v) { return String(v || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 120); }
 function cleanText_(v) { return String(v || "").replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 120); }
 function cleanFileName_(v) { return String(v || "attachment").replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 180) || "attachment"; }
@@ -305,17 +235,15 @@ function jsonp_(data, callback) {
   return json_(data);
 }
 
-// Run once from the editor (Run > setupCheck) to grant Drive, Gmail and external-request permissions
+// Run once from the editor (Run > setupCheck) to grant Gmail and external-request permissions
 // and to confirm the Script Properties. The result shows in the Execution log.
 function setupCheck() {
   const props = PropertiesService.getScriptProperties();
-  ["SUPABASE_URL", "SUPABASE_ANON_KEY", "ATTACHMENT_FOLDER_ID"].forEach(function(k) {
+  ["SUPABASE_URL", "SUPABASE_ANON_KEY"].forEach(function(k) {
     if (!props.getProperty(k)) throw new Error("Missing Script Property: " + k);
   });
-  const folder = rootFolder_();
   const ping = UrlFetchApp.fetch(String(props.getProperty("SUPABASE_URL")).replace(/\/+$/, "") + "/auth/v1/health",
     { headers: { apikey: props.getProperty("SUPABASE_ANON_KEY") }, muteHttpExceptions: true });
-  console.log("Drive folder: " + folder.getName());
   console.log("Supabase reachable: HTTP " + ping.getResponseCode());
   console.log("Emails left today: " + MailApp.getRemainingDailyQuota());
   console.log("Sender: " + Session.getEffectiveUser().getEmail());

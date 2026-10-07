@@ -400,3 +400,4 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 }
 #emailRoot .modal { width: min(760px, 100%); }
 #emailRoot .modal-backdrop { z-index: 80; }
+button.log-file { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: 12px; text-align: left; }

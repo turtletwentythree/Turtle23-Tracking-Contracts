@@ -1,4 +1,4 @@
--- 010: Attachments on Google Drive and real email from User Case Action (via the Apps Script web app)
+-- 010: Real email from User Case Action (via the Apps Script web app, Gmail); attachments are in Storage (011)
 -- Safe to run more than once. Adds columns and one table; no existing data is changed or removed.
 --   * action_sla.attachment_required: Attachment Configuration per Action (Resubmit is always optional in the app)
 --   * due_date_requests: requester email, decision remark and supporting documents

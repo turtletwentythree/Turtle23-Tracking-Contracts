@@ -1,5 +1,6 @@
-// Talks to the Google Apps Script web app (apps-script/Code.gs) that saves attachments in Google Drive
-// and sends the status emails. The site never writes to Drive or Gmail itself.
+// Talks to the Google Apps Script web app (apps-script/Code.gs) that sends the status emails through Gmail.
+// Attachments are not stored by the script: they live in Supabase Storage, and the email carries copies
+// (Base64) or, when they are too large for Gmail, links back to the system.
 //  - APP_CONFIG.APPS_SCRIPT_URL is the web app's /exec URL (set from the APPS_SCRIPT_URL repository secret).
 //  - Each call carries the signed-in user's session token; the script checks it with Supabase (Level 2+).
 //  - Every request has a requestId: sending the same request again returns the first result instead of redoing it.
@@ -12,11 +13,11 @@
   const demo = () => window.Store?.mode === "demo" && !url();
   const newId = prefix => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`.toUpperCase();
 
-  function fileToBase64(file) {
+  function blobToBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-      reader.onerror = () => reject(new Error(`อ่านไฟล์ไม่สำเร็จ: ${file.name}`));
+      reader.onerror = () => reject(new Error(`อ่านไฟล์ไม่สำเร็จ: ${file.name || "attachment"}`));
       reader.readAsDataURL(file);
     });
   }
@@ -45,7 +46,7 @@
   }
 
   async function post(body) {
-    if (!url()) throw new Error("ยังไม่ได้ตั้งค่า Apps Script (APPS_SCRIPT_URL) จึงอัปโหลดไฟล์และส่งอีเมลไม่ได้");
+    if (!url()) throw new Error("ยังไม่ได้ตั้งค่า Apps Script (APPS_SCRIPT_URL) จึงส่งอีเมลไม่ได้");
     body = { ...body, accessToken: await window.Store.accessToken() };
     const text = JSON.stringify(body);
     let result = null;
@@ -69,17 +70,7 @@
     isDemo: demo,
     newId,
     health: () => url() ? jsonp({ mode: "health" }).catch(() => ({ state: "unreachable" })) : Promise.resolve({ state: demo() ? "demo" : "not-configured" }),
-    // One file per request (a file can be up to 20 MB). Returns the attachment record kept in the Log.
-    async uploadFile(item, contractId) {
-      if (demo()) {
-        return { fileId: newId("DEMO"), fileName: item.file.name, mimeType: item.file.type || "", fileSize: item.file.size, url: "", downloadUrl: "",
-          uploadedBy: window.Store.who?.() || "demo", uploadedAt: new Date().toISOString(), status: "Demo (not uploaded)" };
-      }
-      const base64 = await fileToBase64(item.file);
-      const r = await post({ mode: "uploadFile", requestId: item.requestId, contractId,
-        file: { fileName: item.file.name, mimeType: item.file.type || "", fileSize: item.file.size, base64 } });
-      return r.file;
-    },
+    blobToBase64,
     async sendEmail(payload) {
       if (demo()) return { sent: true, demo: true, sentAt: new Date().toISOString() };
       return post({ mode: "sendStatusEmail", ...payload });
