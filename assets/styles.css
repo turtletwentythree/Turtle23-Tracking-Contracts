@@ -369,3 +369,34 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 /* CC E-Mail: department picker + typed emails */
 .cc-row { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 8px; align-items: start; }
 @media (max-width: 720px) { .cc-row { grid-template-columns: 1fr; } }
+
+/* Attachments (User Case Action) */
+.attach-box { border: 1px dashed var(--line); border-radius: 8px; padding: 12px; background: #fff; display: grid; gap: 8px; }
+.attach-box.is-required { border-color: var(--green); }
+.attach-box.dragging { background: var(--green-soft); border-style: solid; }
+.attach-box:focus { outline: 2px solid var(--green); outline-offset: 2px; }
+.attach-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.attach-head label { margin: 0; }
+.attach-box .hint { margin: 0; }
+.attach-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.attach-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #FAFBF6; }
+.attach-list li.attach-empty { display: block; color: var(--muted); border-style: dashed; background: none; text-align: center; }
+.attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-error { color: var(--red); margin: 0; font-size: 12.5px; }
+.attach-error:empty { display: none; }
+.attach-warn { margin: 0; padding: 8px 10px; border-radius: 6px; background: #FFF6DB; color: #7A5B00; font-size: 12.5px; }
+
+/* Send Status Update Email */
+.email-form { display: grid; gap: 12px; }
+.email-form .field { margin: 0; }
+.email-preview { margin: 0; padding: 10px 12px; border-radius: 6px; background: #F4F6EC; border: 1px solid var(--line); font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.email-form .form-actions { align-items: center; }
+.email-status { margin-right: auto; font-weight: 700; }
+.email-status.ok { color: var(--green); }
+.email-status.fail { color: var(--red); }
+@media (max-width: 640px) {
+  .attach-list li { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .attach-list li .muted { display: none; }
+}
+#emailRoot .modal { width: min(760px, 100%); }
+#emailRoot .modal-backdrop { z-index: 80; }

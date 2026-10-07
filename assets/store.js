@@ -66,8 +66,11 @@
     async insert(table, row) {
       const r = { ...row };
       if (KEYS[table] === "id" && r.id == null) r.id = this.nextId(table);
-      this.db[table].push(r); this.persist(); return r;
+      (this.db[table] = this.db[table] || []).push(r); this.persist(); return r;
     }
+    async accessToken() { return ""; }
+    // Admins (Level 4-5) who approve Due Date requests
+    async approvers() { return this.db.user_access.filter(u => u.active !== false && (u.role === "admin" || u.role === "root")).map(u => ({ email: u.email, display_name: u.display_name })); }
     async update(table, key, patch) {
       const k = KEYS[table];
       const r = this.db[table].find(x => String(x[k]) === String(key));
@@ -278,6 +281,13 @@
         if (!error) out[t] = data;
       }));
       return out;
+    }
+    // The signed-in user's session token: the Apps Script endpoint checks it with Supabase before uploading or emailing
+    async accessToken() { const { data } = await this.client.auth.getSession(); return data.session?.access_token || ""; }
+    async approvers() {
+      const { data, error } = await this.client.rpc("approver_emails");
+      if (error) throw new Error(/approver_emails/.test(error.message) ? "ยังไม่ได้รัน SQL 010_email_attachments.sql" : error.message);
+      return data || [];
     }
     async insert(table, row) {
       const r = { ...row };

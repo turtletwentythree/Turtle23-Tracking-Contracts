@@ -30,6 +30,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           EMAIL_DOMAIN: ${{ vars.EMAIL_DOMAIN || 'turtle23.com' }}
           ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'false' }}
         # Values are trimmed (a pasted secret often ends with a newline) and JSON-escaped,
@@ -41,7 +42,8 @@ jobs:
               SUPABASE_URL: t(process.env.SUPABASE_URL).replace(/\/+$/, ""),
               SUPABASE_ANON_KEY: t(process.env.SUPABASE_ANON_KEY),
               EMAIL_DOMAIN: t(process.env.EMAIL_DOMAIN) || "turtle23.com",
-              ALLOW_PASSWORD_LOGIN: t(process.env.ALLOW_PASSWORD_LOGIN) === "true"
+              ALLOW_PASSWORD_LOGIN: t(process.env.ALLOW_PASSWORD_LOGIN) === "true",
+              APPS_SCRIPT_URL: /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/.test(t(process.env.APPS_SCRIPT_URL)) ? t(process.env.APPS_SCRIPT_URL) : ""
             };
             // Only the public (publishable / anon) key may ship to the browser.
             const k = cfg.SUPABASE_ANON_KEY;
@@ -52,7 +54,8 @@ jobs:
               console.log("::error::SUPABASE_ANON_KEY holds a SECRET key. It was NOT published. Put the Publishable (sb_publishable_) or anon key in this secret instead.");
               require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "secret_key=true\n");
             }
-            console.log("SUPABASE_URL set:", Boolean(cfg.SUPABASE_URL), "| SUPABASE_ANON_KEY set:", Boolean(cfg.SUPABASE_ANON_KEY));
+            console.log("SUPABASE_URL set:", Boolean(cfg.SUPABASE_URL), "| SUPABASE_ANON_KEY set:", Boolean(cfg.SUPABASE_ANON_KEY), "| APPS_SCRIPT_URL set:", Boolean(cfg.APPS_SCRIPT_URL));
+            if (t(process.env.APPS_SCRIPT_URL) && !cfg.APPS_SCRIPT_URL) console.log("::warning::APPS_SCRIPT_URL must look like https://script.google.com/macros/s/<id>/exec");
             if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) console.log("::warning::Supabase secrets are missing, the site will run in demo mode");
             require("fs").writeFileSync("assets/config.js", "window.APP_CONFIG = " + JSON.stringify(cfg, null, 2) + ";\n");
           '

@@ -5,6 +5,7 @@
   // ───────────── State ─────────────
   const S = {
     user: null,
+    attach: {},
     db: { contracts: [], contract_logs: [], departments: [], people: [], contract_types: [], action_sla: [], due_date_requests: [] },
     view: "dashboard",
     filters: {},          // contracts table column filters, per view
@@ -646,7 +647,7 @@
   // or its Drive folder when the snapshot has no link to the file itself
   const safeUrl = u => { try { const x = new URL(u); return x.protocol === "https:" && /(^|\.)google\.com$/.test(x.hostname) ? x.href : ""; } catch (e) { return ""; } };
   function logFiles(l) {
-    const files = (l.details?.attachments || []).map(a => {
+    const files = lf(l, "attachments").map(a => {
       const file = safeUrl(a.url || a.downloadUrl);
       return { name: a.originalFileName || a.fileName || "File", url: file || safeUrl(a.cloudFolderUrl), folder: !file };
     }).filter(a => a.url);
@@ -750,6 +751,7 @@
           <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to"><option value="">Same as Contract Owner</option>${peopleByDept(F.station_to)}</select></div>
           <div class="field"><label>Add Case Date / วันที่รับเรื่อง</label><input class="input" type="date" data-add="add_case_date" value="${esc(start)}"></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" data-add="remark">${esc(F.remark || "")}</textarea></div>
+          ${attachBox("add", attachRule("add"))}
         </div>
         <div class="summary-grid">
           <div class="kv"><span>Classification</span><strong>${esc(short(F.classification))}</strong></div>
@@ -772,6 +774,7 @@
     const F = S.addForm;
     const missing = [["type", "Type of Contract"], ["name", "Contract Name"], ["department", "Department"], ["owner", "Contract Owner"]].filter(([k]) => !F[k]).map(x => x[1]);
     if (missing.length) return toast("กรุณากรอก: " + missing.join(", "), true);
+    if (!checkAttach("add", attachRule("add"))) return;
     const isConf = F.classification === CLASS_CONF;
     const match = activeTypes().find(t => t.classification === F.classification && t.type === F.type && (t.sub_type || "") === (F.sub_type || ""))
       || activeTypes().find(t => t.classification === F.classification && t.type === F.type);
@@ -782,19 +785,25 @@
     const id = nextContractId(isConf, F.department);
     const who = S.user.display_name || S.user.username;
     await guard(async () => {
+      const files = await uploadAttach("add", id);
       await window.Store.insert("contracts", {
         id, name: F.name, department: F.department, owner: F.owner, classification: short(F.classification), type: F.type,
         sub_type: short(F.sub_type) || short(F.type), vendor: F.vendor || "", stage: "Draft Created", cycle: 1, returns: 0,
         station_from: F.owner, station_to: to, station_in: start, add_case_date: start, due_date: due, system_due: due,
         total_sla: sla, remark: F.remark || "", access_level: isConf ? "Confidential" : "Normal", status: "Open"
       });
-      await window.Store.insert("contract_logs", {
+      const log = await window.Store.insert("contract_logs", {
         contract_id: id, log_no: 1, cycle: 1, action: "Draft Created", from_person: F.owner, to_person: to,
-        in_date: start, sla, reason: "Add Case", approval: "OK", updated_by: who, updated_at: new Date().toISOString()
+        in_date: start, sla, reason: "Add Case", approval: "OK", attachments: files, updated_by: who, updated_at: new Date().toISOString()
       });
-      S.addForm = { classification: F.classification };
-      await reload(); renderNav(); render(); openDrawer(id);
-    }, `สร้างเคส ${id} แล้ว`);
+      S.addForm = { classification: F.classification }; S.attach.add = [];
+      await reload(); renderNav(); render();
+      const c = S.db.contracts.find(x => x.id === id);
+      toast(`สร้างเคส ${id} แล้ว`);
+      if (c) openEmailModal({ kind: "add_case", contract: c, logId: log?.id, action: "Add Case", to: personEmail(to), files,
+        ...caseEmail({ c, action: "Add Case", actionTh: "สร้างเคสใหม่", from: F.owner, toName: to, reason: F.remark, files,
+          extra: [["Total SLA", "SLA รวม", `${sla} Working Days / วันทำการ`], ["Add Case Date", "วันที่รับเรื่อง", fmtDate(start)]] }) });
+    });
   }
 
   function contractPicker(attr) {
@@ -828,6 +837,7 @@
             <div class="cc-row"><select class="select cc-pick" id="upCcPick"><option value="">เลือกตามแผนก / Pick by department</option>${ccByDept()}</select>
             <div class="cc-box"><span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="หรือพิมพ์อีเมลแล้วกด Enter"></div></div>
             <datalist id="ccOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>
+          ${attachBox("update", attachRule("update", ""))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-update-submit ${c ? "" : "disabled"}>Save Update / บันทึก</button></div>
       </div></section>`;
@@ -878,6 +888,7 @@
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
     if (S.ccDraft === undefined) S.ccDraft = [];
     if ($("#upCc")?.value.trim() && !addCc($("#upCc").value)) return;
+    if (!checkAttach("update", attachRule("update", action))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const cycle = c.cycle + (action === "Resubmit" ? 1 : 0);
@@ -889,18 +900,24 @@
     const alert = forward ? "U" : aSla == null ? "N" : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
     const cc = (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
     await guard(async () => {
+      const files = await uploadAttach("update", c.id);
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
-      await window.Store.insert("contract_logs", {
+      const log = await window.Store.insert("contract_logs", {
         contract_id: c.id, log_no: logNo, cycle, action, from_person: c.station_to || c.owner, to_person: to,
         in_date: date, sla: aSla, action_sla: aSla, days_on_hand: onHand, alert: ALERT_LABEL[alert], cc_recipients: cc,
-        reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
+        attachments: files, reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
       await window.Store.update("contracts", c.id, {
         stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: c.station_to || c.owner, station_to: to, station_in: date
       });
-      S.ccDraft = [];
-      await reload(); render();
-    }, `อัปเดต ${c.id} แล้ว`);
+      S.ccDraft = []; S.attach.update = [];
+      await reload(); renderNav(); render();
+      toast(`อัปเดต ${c.id} แล้ว`);
+      const fresh = S.db.contracts.find(x => x.id === c.id) || c, def = (S.db.action_sla || []).find(a => a.action === action);
+      openEmailModal({ kind: "update_status", contract: fresh, logId: log?.id, action, to: personEmail(to), cc: cc.map(r => r.email), files,
+        ...caseEmail({ c: fresh, action, from: c.station_to || c.owner, toName: to, reason, files,
+          extra: [["Action SLA", "SLA ของขั้นตอน", aSla == null ? "-" : `${aSla} Working Days / วันทำการ`], ["Description", "คำอธิบาย", def?.description || ""]] }) });
+    });
   }
 
   function renderCloseCase() {
@@ -913,7 +930,10 @@
           <div class="field"><label>Result / ผลลัพธ์ <span class="req">*</span></label><select class="select" id="clResult">
             <option value="Closed">Completed · ลงนามเรียบร้อย</option><option value="Cancelled">Cancelled · ยกเลิก</option></select></div>
           <div class="field"><label>Close Date / วันที่ปิด</label><input class="input" type="date" id="clDate" value="${todayISO()}"></div>
-          <div class="field full"><label>Note / หมายเหตุ</label><textarea class="input" rows="2" id="clNote"></textarea></div>
+          <div class="field"><label>Final Contract Owner / ผู้รับผิดชอบสัญญา</label><select class="select" id="clOwner">${peopleByDept(c?.owner)}</select></div>
+          <div class="field"><label>To / แจ้งอีเมลถึง <span class="req">*</span></label><select class="select" id="clTo"><option value="">Select person</option>${peopleByDept(c ? personEmail(c.owner) : "", "email")}</select></div>
+          <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" id="clNote"></textarea></div>
+          ${attachBox("close", attachRule("close"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-close-submit ${c ? "" : "disabled"}>Close Case / ปิดเคส</button></div>
       </div></section>`;
@@ -923,20 +943,32 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     if (!c) return toast("กรุณาเลือกสัญญา", true);
     const result = $("#clResult").value, date = $("#clDate").value || todayISO(), note = $("#clNote").value.trim();
+    const owner = $("#clOwner").value || c.owner, toEmail = $("#clTo").value;
+    if (!toEmail) return toast("กรุณาเลือกผู้รับอีเมล (To)", true);
+    if (!checkAttach("close", attachRule("close"))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const who = S.user.display_name || S.user.username;
+    const action = result === "Closed" ? "Completed" : "Cancelled";
     await guard(async () => {
+      const files = await uploadAttach("close", c.id);
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
-      await window.Store.insert("contract_logs", {
-        contract_id: c.id, log_no: logNo, cycle: c.cycle, action: result === "Closed" ? "Completed" : "Cancelled",
-        alert: result === "Closed" ? "B=Completed" : "B=Cancelled", days_on_hand: 0,
-        from_person: c.station_to, to_person: c.owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
+      const log = await window.Store.insert("contract_logs", {
+        contract_id: c.id, log_no: logNo, cycle: c.cycle, action,
+        alert: result === "Closed" ? "B=Completed" : "B=Cancelled", days_on_hand: 0, attachments: files,
+        from_person: c.station_to, to_person: owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
-      await window.Store.update("contracts", c.id, { status: result, stage: result === "Closed" ? "Completed" : "Cancelled", closed_at: date, close_reason: note || (result === "Closed" ? "Completed" : "Cancelled") });
-      S.selectedContract = null;
+      await window.Store.update("contracts", c.id, { status: result, stage: action, owner, closed_at: date, close_reason: note || action });
+      S.selectedContract = null; S.attach.close = [];
       await reload(); renderNav(); render();
-    }, `ปิดเคส ${c.id} แล้ว`);
+      toast(`ปิดเคส ${c.id} แล้ว`);
+      const fresh = S.db.contracts.find(x => x.id === c.id) || c;
+      const toName = S.db.people.find(p => (p.email || "").toLowerCase() === toEmail.toLowerCase())?.name || toEmail;
+      openEmailModal({ kind: "close_case", contract: fresh, logId: log?.id, action, to: toEmail, files,
+        ...caseEmail({ c: fresh, action: result === "Closed" ? "Signed / Completed" : "Cancelled", actionTh: result === "Closed" ? "ลงนามเรียบร้อย / ปิดงาน" : "ยกเลิก",
+          from: who, toName, reasonLabel: "Remark / หมายเหตุ", reason: note, files,
+          extra: [["Close Date", "วันที่ปิด", fmtDate(date)], ["Closed By", "ผู้ปิดเคส", who], ["Final Contract Owner", "ผู้รับผิดชอบสัญญา", owner]] }) });
+    });
   }
 
   function renderDueCase() {
@@ -949,6 +981,7 @@
         <div class="form-grid">
           <div class="field"><label>Requested Due Date <span class="req">*</span></label><input class="input" type="date" id="ddDate" value="${c ? esc(c.due_date) : ""}"></div>
           <div class="field" style="grid-column:span 2"><label>Reason / เหตุผล <span class="req">*</span></label><input class="input" id="ddReason" placeholder="เหตุผลที่ขอขยายเวลา"></div>
+          ${attachBox("due", attachRule("due"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-due-submit ${c ? "" : "disabled"}>Submit Request / ส่งคำขอ</button></div>
         ${mine.length ? `<div><p class="section-title">คำขอล่าสุด</p><div class="table-wrap"><table class="grid compact"><thead><tr><th>#</th><th>Contract</th><th>Requested</th><th>Reason</th><th>By</th><th>Status</th></tr></thead><tbody>
@@ -961,16 +994,277 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const date = $("#ddDate").value, reason = $("#ddReason").value.trim();
     if (!c || !date || !reason) return toast("กรุณาเลือกสัญญา วันที่ และเหตุผล", true);
+    if (!checkAttach("due", attachRule("due"))) return;
+    const who = S.user.display_name || S.user.username, requester = (S.user.email || "").toLowerCase();
     await guard(async () => {
-      await window.Store.insert("due_date_requests", {
-        contract_id: c.id, requested_due: date, reason, requested_by: S.user.display_name || S.user.username, status: "Pending", created_at: new Date().toISOString()
+      const files = await uploadAttach("due", c.id);
+      const req = await window.Store.insert("due_date_requests", {
+        contract_id: c.id, requested_due: date, reason, requested_by: who, requester_email: requester, attachments: files, status: "Pending", created_at: new Date().toISOString()
       });
+      S.attach.due = [];
       await reload(); render();
-    }, "ส่งคำขอแล้ว รอ Admin อนุมัติ");
+      toast("ส่งคำขอแล้ว รอ Admin อนุมัติ");
+      // Approval email goes to the active Admins: the first as To, the rest as CC
+      const admins = await window.Store.approvers().catch(e => { toast(e.message, true); return []; });
+      const emails = admins.map(a => (a.email || "").toLowerCase()).filter(Boolean);
+      const fresh = S.db.contracts.find(x => x.id === c.id) || c;
+      openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", cc: emails.slice(1), files,
+        title: "Send Due Date Approval Email",
+        ...caseEmail({ c: fresh, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: who, toName: admins[0]?.display_name || "Admin",
+          reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason, files,
+          extra: [["Request ID", "เลขที่คำขอ", req?.id], ["Current Due Date", "วันครบกำหนดปัจจุบัน", fmtDate(fresh.due_date)],
+            ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(date)], ["Requester", "ผู้ขอ", `${who}${requester ? ` <${requester}>` : ""}`],
+            ["Approve in", "อนุมัติที่", "Admin Tools > Due Date Approval"]] }) });
+    });
+  }
+
+  // ───────────── Attachments (Google Drive via Apps Script) ─────────────
+  // One "Attach Files" button per form, plus drag and drop. Files go to Drive when the form is saved,
+  // and the Log keeps each file's own link (fileId, url, downloadUrl), never a folder link.
+  const ATTACH_MAX = 10, ATTACH_BYTES = 20 * 1024 * 1024;
+  const ATTACH_EXT = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "jpg", "jpeg", "png"];
+  const attachItems = key => (S.attach[key] = S.attach[key] || []);
+  const fmtSize = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
+  // Attachment Configuration: Add Case always needs a file, Resubmit never does, other Actions follow the
+  // "Attachment Required" switch in Master Data > Action SLA; Close Case and Due Date are optional
+  function attachRule(kind, action) {
+    if (kind === "add") return { required: true };
+    if (kind !== "update") return { required: false };
+    if (action === "Resubmit") return { required: false, resubmit: true };
+    return { required: Boolean((S.db.action_sla || []).find(a => a.action === action)?.attachment_required) };
+  }
+  const attachHelp = rule => rule.resubmit ? ["Optional for Resubmit.", "ไม่บังคับแนบไฟล์สำหรับการส่งกลับเข้าตรวจ"]
+    : ["Up to 10 files · 20 MB per file · PDF, Word, Excel, PowerPoint, JPG, PNG", "สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 20 MB · ระบบอัปโหลดขึ้น Google Drive เมื่อกดบันทึก"];
+  function attachBox(key, rule) {
+    const [en, th] = attachHelp(rule);
+    return `<div class="field full attach-box${rule.required ? " is-required" : ""}" data-attach="${key}" tabindex="-1">
+      <div class="attach-head"><label>Attachments / ไฟล์แนบ <span class="req" data-attach-star ${rule.required ? "" : "hidden"}>*</span></label>
+        <button type="button" class="btn" data-attach-pick>📎 Attach Files / แนบไฟล์</button>
+        <input type="file" multiple hidden accept="${ATTACH_EXT.map(e => "." + e).join(",")}" data-attach-input ${rule.required ? "required" : ""}></div>
+      <p class="hint" data-attach-help>${esc(en)}<br>${esc(th)}</p>
+      <ul class="attach-list" data-attach-list>${attachRows(key)}</ul>
+      <p class="attach-error" data-attach-error></p>
+      ${window.Mailer.configured() ? "" : `<p class="attach-warn">ยังไม่ได้ตั้งค่า Apps Script จึงยังอัปโหลดไฟล์และส่งอีเมลไม่ได้</p>`}
+    </div>`;
+  }
+  function attachRows(key) {
+    const items = attachItems(key);
+    if (!items.length) return `<li class="attach-empty">ยังไม่มีไฟล์ · ลากไฟล์มาวางที่นี่ได้ / Drag and drop files here</li>`;
+    return items.map((it, i) => {
+      const cls = it.status === "Uploaded" ? "tag-green" : it.status === "Failed" ? "tag-red" : it.status === "Uploading..." ? "tag-amber" : "tag-dark";
+      return `<li><span class="attach-name" title="${esc(it.file.name)}">📄 ${esc(it.file.name)}</span><span class="muted small">${fmtSize(it.file.size)}</span>
+        <span class="tag ${cls}" title="${esc(it.error || "")}">${esc(it.status)}</span>
+        <button type="button" class="icon-button" data-attach-del="${i}" aria-label="Remove ${esc(it.file.name)}" ${it.status === "Uploading..." ? "disabled" : ""}>✕</button></li>`;
+    }).join("");
+  }
+  function drawAttach(key) {
+    const box = $(`[data-attach="${key}"]`);
+    if (box) $("[data-attach-list]", box).innerHTML = attachRows(key);
+  }
+  function attachError(key, en, th) {
+    const box = $(`[data-attach="${key}"]`);
+    if (box) $("[data-attach-error]", box).innerHTML = en ? `${esc(en)}<br>${esc(th || "")}` : "";
+  }
+  function setAttachRule(key, rule) {
+    const box = $(`[data-attach="${key}"]`); if (!box) return;
+    const [en, th] = attachHelp(rule);
+    box.classList.toggle("is-required", rule.required);
+    $("[data-attach-star]", box).hidden = !rule.required;
+    const input = $("[data-attach-input]", box);
+    if (rule.required) input.setAttribute("required", ""); else input.removeAttribute("required");
+    $("[data-attach-help]", box).innerHTML = `${esc(en)}<br>${esc(th)}`;
+    if (!rule.required) attachError(key);
+  }
+  function addFiles(key, list) {
+    const items = attachItems(key), problems = [];
+    [...list].forEach(file => {
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      if (items.length >= ATTACH_MAX) return problems.push(`${file.name}: เกิน ${ATTACH_MAX} ไฟล์`);
+      if (!ATTACH_EXT.includes(ext)) return problems.push(`${file.name}: ไม่รองรับไฟล์ประเภทนี้`);
+      if (file.size > ATTACH_BYTES) return problems.push(`${file.name}: ใหญ่เกิน 20 MB`);
+      if (!file.size) return problems.push(`${file.name}: ไฟล์ว่าง`);
+      if (items.some(it => it.file.name === file.name && it.file.size === file.size)) return problems.push(`${file.name}: แนบไฟล์นี้แล้ว`);
+      items.push({ file, status: "Ready", requestId: window.Mailer.newId("UP") });
+    });
+    attachError(key, problems.join(" · "), problems.length ? "ไฟล์ข้างต้นไม่ได้ถูกเพิ่ม" : "");
+    drawAttach(key);
+  }
+  function bindAttach(root) {
+    $$("[data-attach]", root).forEach(box => {
+      const key = box.dataset.attach, input = $("[data-attach-input]", box);
+      $("[data-attach-pick]", box).addEventListener("click", () => input.click());
+      input.addEventListener("change", () => { addFiles(key, input.files); input.value = ""; });
+      box.addEventListener("dragover", e => { e.preventDefault(); box.classList.add("dragging"); });
+      box.addEventListener("dragleave", e => { if (!box.contains(e.relatedTarget)) box.classList.remove("dragging"); });
+      box.addEventListener("drop", e => { e.preventDefault(); box.classList.remove("dragging"); addFiles(key, e.dataTransfer.files); });
+      box.addEventListener("click", e => {
+        const b = e.target.closest("[data-attach-del]"); if (!b) return;
+        attachItems(key).splice(Number(b.dataset.attachDel), 1); attachError(key); drawAttach(key);
+      });
+    });
+  }
+  function checkAttach(key, rule) {
+    if (rule.required && !attachItems(key).length) {
+      attachError(key, "Please attach at least one required document.", "กรุณาแนบเอกสารที่กำหนดอย่างน้อย 1 ไฟล์");
+      const box = $(`[data-attach="${key}"]`); box?.scrollIntoView({ behavior: "smooth", block: "center" }); box?.focus();
+      return false;
+    }
+    if (attachItems(key).length && !window.Mailer.configured()) { toast("ยังไม่ได้ตั้งค่า Apps Script จึงอัปโหลดไฟล์ไม่ได้", true); return false; }
+    attachError(key);
+    return true;
+  }
+  // Upload whatever is not on Drive yet (a retry skips files already uploaded). Throws if any file fails,
+  // so nothing is saved until every file has its own Drive link.
+  async function uploadAttach(key, contractId) {
+    const items = attachItems(key);
+    for (const it of items) {
+      if (it.result) continue;
+      it.status = "Uploading..."; it.error = ""; drawAttach(key);
+      try { it.result = await window.Mailer.uploadFile(it, contractId); it.status = "Uploaded"; }
+      catch (e) { it.status = "Failed"; it.error = e.message; drawAttach(key); throw new Error(`อัปโหลดไม่สำเร็จ: ${it.file.name} (${e.message})`); }
+      drawAttach(key);
+    }
+    return items.map(it => ({
+      fileId: it.result.fileId, fileName: it.result.fileName, mimeType: it.result.mimeType, fileSize: it.result.fileSize,
+      url: it.result.url, downloadUrl: it.result.downloadUrl, uploadedBy: it.result.uploadedBy, uploadedAt: it.result.uploadedAt, status: it.result.status || "Uploaded"
+    }));
+  }
+  // Button stays disabled (and says what it is doing) until the whole save finishes: no double submit
+  async function busy(btn, label, fn) {
+    if (!btn || btn.disabled) return;
+    const html = btn.innerHTML;
+    btn.disabled = true; btn.textContent = label;
+    try { await fn(); } finally { if (btn.isConnected) { btn.disabled = false; btn.innerHTML = html; } }
+  }
+
+  // ───────────── Status email (sent by Apps Script) ─────────────
+  const EMAIL_OK = e => /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(e);
+  const personEmail = name => (S.db.people.find(p => p.name === name)?.email || "").toLowerCase();
+  const systemUrl = () => location.origin + location.pathname;
+  function caseEmail({ c, action, actionTh, from, toName, reasonLabel, reason, extra = [], files = [] }) {
+    const st = contractState(c), L = [];
+    const row = (en, th, v) => L.push(`${en} / ${th}: ${v || "-"}`);
+    L.push(`Dear ${toName || "Team"}, / เรียน ${toName || "ผู้เกี่ยวข้อง"}`, "");
+    row("Contract ID", "รหัสสัญญา", c.id); row("Contract Name", "ชื่อสัญญา", c.name);
+    row("Department", "แผนก", c.department); row("Contract Owner", "ผู้รับผิดชอบสัญญา", c.owner);
+    L.push("");
+    row("Action", "การดำเนินการ", actionTh ? `${action} (${actionTh})` : action);
+    row("From", "ส่งจาก", from); row("To", "ส่งถึง", toName);
+    row("Status Update", "สถานะ", STATUS_LABEL[st.code]); row("Due Date", "วันครบกำหนด", fmtDate(c.due_date));
+    extra.forEach(([en, th, v]) => row(en, th, v));
+    if (reason) L.push("", `${reasonLabel || "Action Reason / เหตุผล"}:`, reason);
+    if (files.length) {
+      L.push("", "Attachments / ไฟล์แนบ");
+      files.forEach((f, i) => L.push(`${i + 1}. ${f.fileName}${f.downloadUrl ? `\n   Download: ${f.downloadUrl}` : ""}`));
+    }
+    L.push("", "Please review and proceed accordingly. / กรุณาตรวจสอบและดำเนินการตามขั้นตอน", "",
+      `System Link / ลิงก์เข้าสู่ระบบ: ${systemUrl()}`, "", "Contract Tracking System");
+    return { subject: `[Contract Tracking] ${action}: ${c.id} - ${c.name}`, body: L.join("\n") };
+  }
+
+  // Send Status Update Email: To, CC, Subject, Message, Attachments. Saving already happened; this only sends.
+  // Retry keeps the same requestId, so the Apps Script never sends the same email twice and no Log is added.
+  function openEmailModal(d) {
+    const st = { to: (d.to || "").toLowerCase(), cc: [], requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
+    (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && e !== st.to && !st.cc.includes(e)) st.cc.push(e); });
+    const files = d.files || [];
+    const ready = window.Mailer.configured();
+    const root = openModal("emailRoot", d.title || "Send Status Update Email", `${d.contract.id} · ${d.action}`, `
+      <div class="email-form">
+        <div class="field"><label>To / ถึง <span class="req">*</span></label><input class="input" type="email" id="emTo" value="${esc(st.to)}" placeholder="receiver@turtle23.com"></div>
+        <div class="field"><label>CC / สำเนาถึง</label>
+          <div class="cc-row"><select class="select cc-pick" id="emCcPick"><option value="">Employee Directory / เลือกตามแผนก</option>${ccByDept()}</select>
+          <div class="cc-box"><span data-em-chips></span><input class="cc-input" id="emCc" list="emCcOptions" autocomplete="off" placeholder="พิมพ์อีเมลแล้วกด Enter หรือ ,"></div></div>
+          <datalist id="emCcOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>
+        <div class="field"><label>Subject / หัวเรื่อง</label><input class="input" id="emSubject" value="${esc(d.subject)}"></div>
+        <div class="field"><label>Message / ข้อความ</label><textarea class="input" rows="12" id="emBody">${esc(d.body)}</textarea></div>
+        <div class="field"><label>Attachments / ไฟล์แนบ</label><ul class="attach-list">${files.length
+          ? files.map(f => `<li><span class="attach-name">📄 ${esc(f.fileName)}</span><span class="muted small">${fmtSize(f.fileSize)}</span></li>`).join("")
+          : `<li class="attach-empty">-</li>`}</ul></div>
+        <pre class="email-preview" data-em-preview></pre>
+        <p class="attach-error" data-em-error></p>
+        ${ready ? "" : `<p class="attach-warn">ยังไม่ได้ตั้งค่า Apps Script จึงยังส่งอีเมลไม่ได้ ข้อมูลบันทึกแล้ว กด Cancel ได้</p>`}
+        <div class="form-actions"><span class="email-status" data-em-status></span>
+          <button class="btn" data-em-cancel>Cancel / ยกเลิก</button>
+          <button class="btn btn-primary" data-em-send ${ready ? "" : "disabled"}>Send Email / ส่งอีเมล</button></div>
+      </div>`);
+    const err = (en, th) => { $("[data-em-error]", root).innerHTML = en ? `${esc(en)}<br>${esc(th || "")}` : ""; };
+    const preview = () => {
+      const body = $("#emBody", root).value.trim();
+      $("[data-em-preview]", root).textContent = [`To: ${$("#emTo", root).value.trim() || "-"}`, `CC: ${st.cc.length ? st.cc.join(", ") : "-"}`,
+        `Subject: ${$("#emSubject", root).value.trim() || "-"}`, `Message: ${body.split("\n")[0].slice(0, 120)}${body.length > 120 ? " ..." : ""}`,
+        `Attachments: ${files.length ? `${files.length} file${files.length > 1 ? "s" : ""}` : "-"}`].join("\n");
+    };
+    const chips = () => {
+      $("[data-em-chips]", root).innerHTML = st.cc.map((e, i) => `<span class="cc-chip" title="${esc(e)}">${esc(e)}<button type="button" data-em-del="${i}" aria-label="Remove">×</button></span>`).join("");
+      preview();
+    };
+    const addCcEmail = value => {
+      const list = String(value || "").split(/[,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+      for (const e of list) {
+        if (!EMAIL_OK(e)) { err("Enter a valid email address.", "กรุณากรอกอีเมลให้ถูกต้อง"); return false; }
+        if (e === $("#emTo", root).value.trim().toLowerCase()) { err("CC cannot be the same as To.", "CC ต้องไม่ซ้ำกับผู้รับหลัก (To)"); return false; }
+        if (!st.cc.includes(e)) st.cc.push(e);
+      }
+      err(); chips(); return true;
+    };
+    const ccInput = $("#emCc", root);
+    ccInput.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); if (addCcEmail(ccInput.value)) ccInput.value = ""; } });
+    ccInput.addEventListener("blur", () => { if (ccInput.value.trim() && addCcEmail(ccInput.value)) ccInput.value = ""; });
+    ccInput.addEventListener("input", e => { if (e.inputType === "insertReplacementText" || /[,;]$/.test(ccInput.value)) { if (addCcEmail(ccInput.value)) ccInput.value = ""; } });
+    $("#emCcPick", root).addEventListener("change", e => { if (e.target.value) addCcEmail(e.target.value); e.target.value = ""; });
+    $("[data-em-chips]", root).addEventListener("click", e => { const b = e.target.closest("[data-em-del]"); if (b) { st.cc.splice(Number(b.dataset.emDel), 1); chips(); } });
+    ["#emTo", "#emSubject", "#emBody"].forEach(s => $(s, root).addEventListener("input", preview));
+    const close = () => { root.innerHTML = ""; d.onClose?.(st.sent); };
+    $("[data-em-cancel]", root).addEventListener("click", async () => {
+      if (st.sending) return;
+      if (!st.sent) await logEmail(d, st, files, "Cancelled");
+      close();
+    });
+    $("[data-em-send]", root).addEventListener("click", async e => {
+      const btn = e.currentTarget, status = $("[data-em-status]", root);
+      if (st.sending || st.sent) return;
+      if (ccInput.value.trim() && !addCcEmail(ccInput.value)) return;
+      ccInput.value = "";
+      const to = $("#emTo", root).value.trim().toLowerCase();
+      if (!EMAIL_OK(to)) { err("Enter a valid email address.", "กรุณากรอกอีเมลผู้รับ (To) ให้ถูกต้อง"); $("#emTo", root).focus(); return; }
+      st.cc = st.cc.filter(x => x !== to); chips();
+      st.to = to; st.subject = $("#emSubject", root).value.trim(); st.body = $("#emBody", root).value;
+      if (!st.subject) { err("Subject is required.", "กรุณากรอกหัวเรื่อง"); return; }
+      err(); st.sending = true; btn.disabled = true; btn.textContent = "Sending..."; status.className = "email-status"; status.textContent = "";
+      const payload = { requestId: st.requestId, contractId: d.contract.id, action: d.action, to, subject: st.subject, body: st.body,
+        attachments: files.filter(f => f.fileId).map(f => ({ fileId: f.fileId })) };
+      if (st.cc.length) payload.cc = [...st.cc];
+      try {
+        const r = await window.Mailer.sendEmail(payload);
+        st.sent = true;
+        status.className = "email-status ok"; status.textContent = r.demo ? "Demo: ไม่ได้ส่งจริง" : "Sent / ส่งแล้ว";
+        btn.textContent = "Sent";
+        if (!r.demo) await logEmail(d, st, files, "Sent");
+        toast(r.demo ? "โหมดสาธิต: ไม่ได้ส่งอีเมลจริง" : `ส่งอีเมลถึง ${to} แล้ว`);
+        setTimeout(close, 900);
+      } catch (ex) {
+        status.className = "email-status fail"; status.textContent = "Send Failed / ส่งไม่สำเร็จ";
+        err(ex.message, "ข้อมูลที่บันทึกไว้ไม่หาย กด Retry Email เพื่อส่งอีกครั้ง");
+        btn.disabled = false; btn.textContent = "Retry Email / ส่งอีกครั้ง";
+        await logEmail(d, st, files, "Failed", ex.message);
+      } finally { st.sending = false; }
+    });
+    chips();
+    return root;
+  }
+  async function logEmail(d, st, files, status, error) {
+    try {
+      await window.Store.insert("email_log", {
+        request_id: st.requestId, kind: d.kind, contract_id: d.contract.id, log_id: d.logId || null, to_email: st.to || null, cc: st.cc,
+        subject: st.subject || d.subject, attachments: files.map(f => ({ fileId: f.fileId, fileName: f.fileName })), status, error: error || null,
+        sent_by: S.user.email || S.user.username || ""
+      });
+    } catch (e) { console.warn("email_log not saved (run 010_email_attachments.sql)", e); }
   }
 
   // ───────────── Master data ─────────────
-  // Column kinds: "key" (typed once, on a new row), "ro", "num", "date", "bool", a list of options, or a function returning one
+  // Column kinds: "key" (typed once, on a new row), "ro", "num", "date", "bool" (blank = on), "flag" (blank = off), a list of options, or a function returning one
   const deptOptions = () => ["", ...(S.db.departments || []).map(d => d.name)];
   const classOptions = () => uniq([CLASS_DAY, CLASS_CONF, ...(S.db.contract_types || []).map(t => t.classification)]);
   const countWhere = (rows, fn) => (rows || []).filter(fn).length;
@@ -1003,7 +1297,7 @@
         ["vendor", "Vendor"], ["group_name", "Group"], ["fixed_sla", "Fixed SLA", "num"], ["sla_version", "SLA Version"], ["source_row", "Source Row", "num"],
         ["remark", "Remark"], ["active", "Active", "bool"]] },
     action_sla: { title: "Action SLA", sub: "SLA ของแต่ละ Action ใน Update Status", track: true, required: ["action"], unique: [["action"]],
-      cols: [["action", "Action", "key"], ["description", "Description / รายละเอียด"], ["sla", "Fixed SLA (Working Days)", "num"], ["rule", "SLA Rule / วิธีนับ"], ["active", "Active", "bool"]],
+      cols: [["action", "Action", "key"], ["description", "Description / รายละเอียด"], ["sla", "Fixed SLA (Working Days)", "num"], ["rule", "SLA Rule / วิธีนับ"], ["attachment_required", "Attachment Required / บังคับแนบไฟล์", "flag"], ["active", "Active", "bool"]],
       uses: r => countWhere(S.db.contract_logs, l => l.action === r.action) },
     contract_logs: { title: "Log View Detail", sub: "แก้ไขข้อมูลใน Log View Detail ของแต่ละสัญญาโดยตรง · เลือกสัญญาก่อน หรือค้นหา", track: true, fixed: true,
       byContract: true, required: ["action"], unique: [["contract_id", "log_no"]], cols: [
@@ -1031,6 +1325,7 @@
       if (kind === "num") v = v === "" || v == null ? null : Number(v);
       else if (kind === "date") v = v || null;
       else if (kind === "bool") v = v !== false;
+      else if (kind === "flag") v = v === true;
       else if (typeof v === "string") v = v.trim();
       if (k === "email") v = v ? String(v).toLowerCase() : null;
       o[k] = v;
@@ -1097,7 +1392,7 @@
     const cell = (r, i, [k, , kind]) => {
       const v = r[k];
       const dis = !editable || kind === "ro" || (kind === "key" && !r.__new) ? "disabled" : "";
-      if (kind === "bool") return `<input type="checkbox" data-cell="${i}" data-k="${k}" ${v !== false ? "checked" : ""} ${editable ? "" : "disabled"}>`;
+      if (kind === "bool" || kind === "flag") return `<input type="checkbox" data-cell="${i}" data-k="${k}" ${(kind === "flag" ? v === true : v !== false) ? "checked" : ""} ${editable ? "" : "disabled"}>`;
       const list = typeof kind === "function" ? kind() : kind;
       if (Array.isArray(list)) {
         const vals = list.map(o => Array.isArray(o) ? o : [o, o]);
@@ -1215,7 +1510,7 @@
       let added = 0, updated = 0;
       rows.slice(1).filter(r => r.some(v => String(v).trim())).forEach(r => {
         const o = {};
-        def.cols.forEach(([k, , kind], j) => { if (idx[j] < 0 || kind === "ro") return; let v = r[idx[j]]; if (kind === "bool") v = !/^(no|false|0|n)$/i.test(String(v).trim()); o[k] = v; });
+        def.cols.forEach(([k, , kind], j) => { if (idx[j] < 0 || kind === "ro") return; let v = r[idx[j]]; if (kind === "bool") v = !/^(no|false|0|n)$/i.test(String(v).trim()); if (kind === "flag") v = /^(yes|true|1|y)$/i.test(String(v).trim()); o[k] = v; });
         const existing = keyCols.length && S.masterDraft.rows.find(x => sig(x) === sig(o));
         if (existing) { Object.assign(existing, o); updated++; }
         else if (!def.fixed) { S.masterDraft.rows.push({ active: true, ...o, __new: true }); added++; }
@@ -1237,12 +1532,13 @@
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
     ${renderImport()}
     <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
-      <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Decision</th></tr></thead>
+      <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Remark</th><th>Decision</th></tr></thead>
       <tbody>${pending.map(r => { const c = S.db.contracts.find(x => x.id === r.contract_id); return `<tr><td>${r.id}</td><td><button class="id-link" data-open="${esc(r.contract_id)}">${esc(r.contract_id)}</button></td>
         <td>${fmtDate(c?.due_date)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}</td><td>${esc(r.requested_by)}</td>
         <td><input class="cell-input" type="date" value="${esc(r.requested_due)}" id="final-${r.id}"></td>
+        <td><input class="cell-input" id="remark-${r.id}" placeholder="Approval Remark"></td>
         <td style="white-space:nowrap"><button class="btn btn-sm btn-green" data-approve="${r.id}">Approve</button> <button class="btn btn-sm btn-danger" data-reject="${r.id}">Reject</button></td></tr>`; }).join("")
-        || `<tr><td colspan="8">No Due Date requests</td></tr>`}</tbody></table></div>
+        || `<tr><td colspan="9">No Due Date requests</td></tr>`}</tbody></table></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Decision</th><th>Final Due Date</th><th>Admin</th><th>Date</th></tr></thead>
       <tbody>${history.map(r => `<tr><td>${r.id}</td><td>${esc(r.contract_id)}</td><td>${reqTag(r.status)}</td><td>${fmtDate(r.final_due)}</td><td>${esc(r.decided_by)}</td><td>${fmtDate(String(r.decided_at || "").slice(0, 10))}</td></tr>`).join("")
         || `<tr><td colspan="6">No Due Date adjustment history</td></tr>`}</tbody></table></div></section>
@@ -1330,11 +1626,23 @@
   async function decide(id, status) {
     const r = S.db.due_date_requests.find(x => String(x.id) === String(id));
     const finalDue = status === "Approved" ? ($(`#final-${id}`)?.value || r.requested_due) : null;
+    const remark = ($(`#remark-${id}`)?.value || "").trim(), who = S.user.display_name || S.user.username;
+    const current = S.db.contracts.find(x => x.id === r.contract_id)?.due_date;
     await guard(async () => {
-      await window.Store.update("due_date_requests", r.id, { status, final_due: finalDue, decided_by: S.user.display_name || S.user.username, decided_at: new Date().toISOString() });
+      await window.Store.update("due_date_requests", r.id, { status, final_due: finalDue, decision_remark: remark || null, decided_by: who, decided_at: new Date().toISOString() });
       if (status === "Approved") await window.Store.update("contracts", r.contract_id, { due_date: finalDue });
       await reload(); render();
-    }, status === "Approved" ? "อนุมัติแล้ว" : "ปฏิเสธคำขอแล้ว");
+      toast(status === "Approved" ? "อนุมัติแล้ว" : "ปฏิเสธคำขอแล้ว");
+      const c = S.db.contracts.find(x => x.id === r.contract_id);
+      if (!c) return;
+      const files = Array.isArray(r.attachments) ? r.attachments : [];
+      openEmailModal({ kind: "due_decision", contract: c, action: `Due Date ${status}`, to: r.requester_email || personEmail(r.requested_by), files: [],
+        title: "Send Due Date Decision Email",
+        ...caseEmail({ c, action: `Due Date ${status}`, actionTh: status === "Approved" ? "อนุมัติการปรับวันครบกำหนด" : "ไม่อนุมัติการปรับวันครบกำหนด",
+          from: who, toName: r.requested_by, reasonLabel: "Approval Remark / หมายเหตุการพิจารณา", reason: remark, files,
+          extra: [["Request ID", "เลขที่คำขอ", r.id], ["Decision", "ผลการพิจารณา", status], ["Current Due Date", "วันครบกำหนดเดิม", fmtDate(current)],
+            ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(r.requested_due)], ["Approved Due Date", "วันครบกำหนดที่อนุมัติ", finalDue ? fmtDate(finalDue) : "-"]] }) });
+    });
   }
 
   function copyText(text) {
@@ -1387,12 +1695,14 @@
       if (el.tagName === "SELECT" || el.type === "date") render();
     }));
     $("[data-add-reset]", root)?.addEventListener("click", () => { S.addForm = { classification: CLASS_DAY }; render(); });
-    $("[data-add-submit]", root)?.addEventListener("click", submitAddCase);
+    $("[data-add-submit]", root)?.addEventListener("click", e => busy(e.currentTarget, "Saving...", submitAddCase));
     $$("[data-pick]", root).forEach(s => s.addEventListener("change", () => { S.selectedContract = s.value; render(); }));
-    $("[data-update-submit]", root)?.addEventListener("click", submitUpdate);
+    $("[data-update-submit]", root)?.addEventListener("click", e => busy(e.currentTarget, "Saving...", submitUpdate));
+    $("#upAction", root)?.addEventListener("change", e => setAttachRule("update", attachRule("update", e.target.value)));
     bindCc(root);
-    $("[data-close-submit]", root)?.addEventListener("click", submitClose);
-    $("[data-due-submit]", root)?.addEventListener("click", submitDue);
+    bindAttach(root);
+    $("[data-close-submit]", root)?.addEventListener("click", e => busy(e.currentTarget, "Saving...", submitClose));
+    $("[data-due-submit]", root)?.addEventListener("click", e => busy(e.currentTarget, "Saving...", submitDue));
     // master
     $$("[data-mtab]", root).forEach(b => b.addEventListener("click", () => {
       if (S.masterDraft?.dirty && !armed(b, "ทิ้งการแก้ไข?")) return toast("มีการแก้ไขที่ยังไม่บันทึก กดซ้ำเพื่อทิ้ง หรือกด Save ก่อน");
