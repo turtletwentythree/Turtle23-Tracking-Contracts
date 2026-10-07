@@ -758,8 +758,13 @@
     const sla = match ? match.sla : null;
     const start = F.add_case_date || todayISO();
     const due = sla ? addWorkdays(start, sla) : null;
-    const depts = S.db.departments.filter(d => d.active !== false);
-    const people = activePeople(F.department);
+    // One dropdown for Department / Restaurant + Contract Owner: people grouped under their department
+    const ownerKey = (d, n) => `${d}\u0001${n}`;
+    const ownerGroups = {};
+    activePeople().filter(p => p.name && p.department).forEach(p => { (ownerGroups[p.department] = ownerGroups[p.department] || []).push(p.name); });
+    const ownerOptions = `<option value="">Select Department / Contract Owner</option>` + Object.keys(ownerGroups).sort((a, b) => a.localeCompare(b)).map(d =>
+      `<optgroup label="${esc(d)}">${ownerGroups[d].sort((a, b) => a.localeCompare(b)).map(n =>
+        `<option value="${esc(ownerKey(d, n))}" ${F.department === d && F.owner === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</optgroup>`).join("");
     const opt = (list, val, ph) => `<option value="">${esc(ph)}</option>` + list.map(v => `<option ${v === val ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
     return `<section class="panel form-panel">
       <div class="panel-head"><div><h2 style="font-size:20px">Add Case</h2><p>สร้างเคส · Create a new contract case and calculate the initial SLA.</p></div>
@@ -785,8 +790,8 @@
             <input class="input" data-add="vendor" value="${esc(F.vendor || "")}" placeholder="Enter Vendor or Counter party"></div>
         </div>
         <div class="form-grid">
-          <div class="field"><label>Department / Restaurant <span class="req">*</span></label><select class="select" data-add="department">${opt(depts.map(d => d.name), F.department, "Select Department")}</select></div>
-          <div class="field"><label>Contract Owner <span class="req">*</span></label><select class="select" data-add="owner">${opt(people.map(p => p.name), F.owner, F.department ? "Select Contract Owner" : "Select Department first")}</select></div>
+          <div class="field"><label>Department / Restaurant · Contract Owner <span class="req">*</span></label><select class="select" data-add-owner>${ownerOptions}</select>
+            ${F.department ? `<p class="hint">Department: <b>${esc(F.department)}</b></p>` : ""}</div>
           <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to"><option value="">Same as Contract Owner</option>${peopleByDept(F.station_to)}</select></div>
           <div class="field"><label>Add Case Date / วันที่รับเรื่อง</label><input class="input" type="date" data-add="add_case_date" value="${esc(start)}"></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" data-add="remark">${esc(F.remark || "")}</textarea></div>
@@ -811,7 +816,7 @@
 
   async function submitAddCase() {
     const F = S.addForm;
-    const missing = [["type", "Type of Contract"], ["name", "Contract Name"], ["department", "Department"], ["owner", "Contract Owner"]].filter(([k]) => !F[k]).map(x => x[1]);
+    const missing = [["type", "Type of Contract"], ["name", "Contract Name"], ["owner", "Department / Contract Owner"]].filter(([k]) => !F[k]).map(x => x[1]);
     if (missing.length) return toast("กรุณากรอก: " + missing.join(", "), true);
     if (!checkAttach("add", attachRule("add"))) return;
     const isConf = F.classification === CLASS_CONF;
@@ -1745,6 +1750,10 @@
       if (k === "department") S.addForm.owner = "";
       if (el.tagName === "SELECT" || el.type === "date") render();
     }));
+    $("[data-add-owner]", root)?.addEventListener("change", e => {
+      const [department = "", owner = ""] = e.target.value.split("\u0001");
+      S.addForm.department = department; S.addForm.owner = owner; render();
+    });
     $("[data-add-reset]", root)?.addEventListener("click", () => { S.addForm = { classification: CLASS_DAY }; render(); });
     $("[data-add-submit]", root)?.addEventListener("click", e => busy(e.currentTarget, "Saving...", submitAddCase));
     $$("[data-pick]", root).forEach(s => s.addEventListener("change", () => { S.selectedContract = s.value; render(); }));
