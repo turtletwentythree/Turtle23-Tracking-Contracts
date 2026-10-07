@@ -591,9 +591,9 @@
     return `<span class="tag status-dot ${code}">${esc(t.split(">>").pop().trim())}</span>`;
   }
   const logRoute = l => `From ${l.from_person || "-"} / To ${l.to_person || "-"}`;
-  // The current Action of an open contract shows live Days on Hand and Alert; earlier logs keep their saved values
+  // The current Action (highest Log No) of an open contract shows live Days on Hand (In to today, even if an Out date
+  // was typed) and Alert, the same values as the Dashboard; earlier logs keep their saved values
   function liveLog(l) {
-    if (l.out_date) return null;
     const c = S.db.contracts.find(x => x.id === l.contract_id); if (!c) return null;
     const st = contractState(c);
     return st.kind === "open" && st.log === l ? st : null;
@@ -603,17 +603,19 @@
       case "contract_id": return `<span class="log-cid">${esc(l.contract_id)}</span>`;
       case "log_view": return `<span class="log-route">${esc(logRoute(l))}</span>`;
       case "in_date": case "out_date": return l[key] ? fmtDate(l[key]) : "";
+      case "sla": { const st = liveLog(l); return esc(st && st.actionSla != null ? st.actionSla : l.sla ?? ""); }
       case "days_on_hand": { const st = liveLog(l); if (st) return dayText(st.onHand); const v = lf(l, key); return esc(v !== "" && v != null ? v : workdays(l.in_date, l.out_date || todayISO())); }
       case "alert": { const st = liveLog(l); return st ? alertTag(st.alert) : alertBadge(lf(l, "alert")); }
       case "delay_reason": return esc(lf(l, key) || "-");
-      case "action": return `<button class="log-action-btn" data-log-action="${esc(l.contract_id)}#${esc(l.log_no)}" title="View reason / ดูเหตุผล">${esc(lf(l, "action_name_en") || l.action || "-")}</button>`;
+      case "action": return `<button class="log-action-btn" data-log-action="${esc(l.contract_id)}#${esc(l.log_no)}" title="View reason / ดูเหตุผล">${esc(l.action || lf(l, "action_name_en") || "-")}</button>`;
       default: { const v = lf(l, key); return esc(typeof v === "object" ? JSON.stringify(v) : v); }
     }
   }
   function logDetailValue(l, key, c) {
     const fmtDT = v => { const d = new Date(v); return isNaN(d) ? String(v || "") : d.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }); };
     switch (key) {
-      case "action": return [lf(l, "action_name_en") || l.action, lf(l, "action_name_th")];
+      // The log's own Action is what the Dashboard counts; the export's Action Name EN/TH can be a stale label
+      case "action": return [l.action || lf(l, "action_name_en"), lf(l, "action_name_en") && lf(l, "action_name_en") !== l.action ? "" : lf(l, "action_name_th")];
       case "alert": { const st = liveLog(l); return [st ? ALERT_LABEL[st.alert] : String(lf(l, "alert")).split(">>").pop().trim()]; }
       case "status_update": return [c ? CONTRACT_STATUS_LABEL[metrics(c).code] : ""];
       case "description": return [lf(l, "action_description_en"), lf(l, "action_description_th")];
