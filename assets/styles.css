@@ -416,3 +416,4 @@ button.log-file { background: none; border: 0; padding: 0; cursor: pointer; font
 .app-closed-banner { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: #FDECEC; color: #9B1C1C; font-weight: 700; }
 .cc-chip.locked { background: #E8F0FE; border-color: #C5D6F5; padding-right: 10px; }
 .cc-warn { font-size: 12px; color: #B45309; }
+.online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2E9E5B; margin-right: 6px; vertical-align: middle; box-shadow: 0 0 0 3px rgba(46,158,91,.18); }

@@ -62,7 +62,7 @@
       if (!acc || acc.active === false) { storage.removeItem(this.sessionKey); return null; }
       return { ...u, role: acc.role, display_name: acc.display_name || u.display_name };
     }
-    async signOut() { storage.removeItem(this.sessionKey); }
+    async signOut() { await this.leavePresence(); storage.removeItem(this.sessionKey); }
     async loadAll() { return JSON.parse(JSON.stringify(this.db)); }
     async insert(table, row) {
       const r = { ...row };
@@ -81,6 +81,27 @@
     }
     // Admins (Level 4-5) who approve Due Date requests
     // On/Off switches (015_app_switch.sql); demo keeps them in the browser
+    // Online users (017_user_presence.sql); demo keeps heartbeats in this browser, so other demo tabs show up too
+    presence() { try { return JSON.parse(storage.getItem("t23-demo-presence") || "{}"); } catch (e) { return {}; } }
+    async touchPresence(page) {
+      const me = await this.currentUser(); if (!me) return false;
+      const lv = (window.ROLES[me.role] || {}).level || 1, open = (await this.appStatus()).app_open !== false;
+      const all = this.presence(), now = new Date().toISOString(), old = all[me.email];
+      if (lv < 4 && !open) { delete all[me.email]; storage.setItem("t23-demo-presence", JSON.stringify(all)); return false; }
+      all[me.email] = { page, last_seen_at: now, started_at: old && Date.now() - new Date(old.last_seen_at) < 600000 ? old.started_at : now };
+      storage.setItem("t23-demo-presence", JSON.stringify(all)); return true;
+    }
+    async leavePresence() {
+      const email = JSON.parse(storage.getItem(this.sessionKey) || "{}").email; if (!email) return;
+      const all = this.presence(); delete all[email]; storage.setItem("t23-demo-presence", JSON.stringify(all));
+    }
+    async onlineUsers(minutes = 3) {
+      const open = (await this.appStatus()).app_open !== false, since = Date.now() - minutes * 60000;
+      return Object.entries(this.presence()).map(([email, p]) => ({ email, ...p, acc: this.db.user_access.find(a => a.email === email) }))
+        .filter(x => x.acc && x.acc.active !== false && new Date(x.last_seen_at) > since && (open || ((window.ROLES[x.acc.role] || {}).level || 1) >= 4))
+        .map(x => ({ email: x.email, display_name: x.acc.display_name, role: x.acc.role, department: x.acc.department, page: x.page, last_sign_in_at: null, started_at: x.started_at, last_seen_at: x.last_seen_at }))
+        .sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at));
+    }
     async appStatus() { return { app_open: true, ...(this.db.app_settings || [])[0] }; }
     async setAppOpen(open, message) {
       this.db.app_settings = [{ app_open: open, closed_message: open ? null : (message || null), changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, changed_at: new Date().toISOString() }];
@@ -290,7 +311,18 @@
         ? "บัญชี Microsoft นี้ไม่ได้อยู่ในโดเมนที่อนุญาต กรุณาติดต่อผู้ดูแลระบบ" : oauthError);
       return data.session ? this.profileFor(data.session.user) : null;
     }
-    async signOut() { await this.client.auth.signOut(); }
+    async signOut() { await this.leavePresence(); await this.client.auth.signOut(); }
+    // Online users (017_user_presence.sql). Before 017 runs, the heartbeat is skipped quietly and the list says so.
+    async touchPresence(page) {
+      const { data, error } = await this.client.rpc("touch_presence", { p_page: page });
+      return error ? null : data !== false;
+    }
+    async leavePresence() { try { await this.client.rpc("leave_presence"); } catch (e) { /* signing out anyway */ } }
+    async onlineUsers(minutes = 3) {
+      const { data, error } = await this.client.rpc("online_users", { p_minutes: minutes });
+      if (error) throw new Error(/online_users/.test(error.message) ? "ยังไม่ได้รัน SQL 017_user_presence.sql" : error.message);
+      return data || [];
+    }
     async loadAll() {
       const out = {};
       await Promise.all(TABLES.map(async t => {

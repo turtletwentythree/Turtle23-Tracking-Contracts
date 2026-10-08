@@ -154,6 +154,7 @@
     const live = window.Store.mode === "supabase";
     $("#syncDot").classList.toggle("live", live);
     $("#syncText").textContent = live ? "Connected to Supabase" : "Demo mode · ข้อมูลในเบราว์เซอร์";
+    startBeat();
     route();
   }
 
@@ -219,7 +220,7 @@
     });
   }
   function route() {
-    if (closedForMe()) return renderClosed();
+    if (closedForMe()) { renderClosed(); return beat(); }
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1] || "dashboard";
     const v = VIEWS.find(x => x.id === id && can(x.min)) || VIEWS[0];
     if (v.id !== id) {
@@ -232,8 +233,27 @@
     $("#pageHeading").textContent = v.title;
     $("#pageSubheading").textContent = v.id === "dashboard" ? `As of Date ${todayISO()}` : v.sub || "";
     render();
+    beat();
     openLinkedContract();
   }
+
+  // ───────────── Online heartbeat (017_user_presence.sql) ─────────────
+  // Every minute and on each page change: "this person has the web app open on this page". Admin Tools lists it.
+  // A refused heartbeat for Level 1-3 means the app was closed meanwhile: show the closed page without waiting for a reload.
+  let beatTimer = null;
+  async function beat() {
+    if (!S.user) return;
+    const ok = await window.Store.touchPresence(closedForMe() ? "closed" : S.view || "dashboard").catch(() => null);
+    if (ok === false && level() < 4 && !closedForMe()) {
+      S.app = await window.Store.appStatus().catch(() => S.app);
+      if (closedForMe()) route();
+    }
+  }
+  function startBeat() {
+    clearInterval(beatTimer);
+    beatTimer = setInterval(() => { if (document.visibilityState === "visible") beat(); }, 60000);
+  }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
   // Email links point to #/contracts/<Contract ID> (or #/confidential/...): the page opens that contract's drawer,
   // where the Log and its attachments are. The link survives the Microsoft sign-in (kept in sessionStorage).
   const LINK_KEY = "t23-open-contract";
@@ -1585,6 +1605,7 @@
     return `<section class="panel"><div class="panel-head"><div><h2>Admin Tools <span class="tag tag-dark">Admin Only</span></h2><p>เครื่องมือสำหรับผู้ดูแลระบบ</p></div>
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
     ${renderAppSwitch()}
+    ${renderOnline()}
     ${renderImport()}
     <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Remark</th><th>Decision</th></tr></thead>
@@ -1627,6 +1648,43 @@
       ${switchCard({ attr: "data-app-switch", on: open, title: "การเข้าใช้งาน Web app", sub: open ? "ผู้ใช้ทุกคนเข้าใช้งานได้ตามสิทธิ์" : "ผู้ใช้ Level 1-3 เห็นหน้า “ระบบปิดใช้งานชั่วคราว” และอ่าน/แก้ข้อมูลไม่ได้",
         onLabel: "เปิดใช้งาน", offLabel: "ปิดอยู่", meta: stamp(a.changed_by, a.changed_at), disabled: a.missing })}
       ${open ? `<div style="padding:0 18px 14px"><input class="input" id="appCloseMsg" placeholder="ข้อความที่ผู้ใช้จะเห็นตอนปิด (ไม่บังคับ) เช่น ปิดปรับปรุงระบบถึง 17:00"></div>` : ""}</section>`;
+  }
+
+  // ───────────── Online users (Level 4-5) ─────────────
+  // Who has the web app open now: a heartbeat within ONLINE_MIN minutes. Refreshes itself while the panel is on screen.
+  const ONLINE_MIN = 3;
+  S.online = { rows: null, error: "", loading: false, at: null };
+  const ago = at => { const m = Math.max(0, Math.round((Date.now() - new Date(at)) / 60000)); return m < 1 ? "เมื่อสักครู่" : `${m} นาทีที่แล้ว`; };
+  const pageLabel = id => id === "closed" ? "หน้าปิดระบบ" : VIEWS.find(v => v.id === id)?.label || id || "-";
+  async function onlineLoad() {
+    const O = S.online; if (O.loading) return;
+    O.loading = true; paintOnline();
+    try { O.rows = await window.Store.onlineUsers(ONLINE_MIN); O.error = ""; } catch (e) { O.error = e.message || String(e); }
+    O.loading = false; O.at = new Date(); paintOnline();
+  }
+  function paintOnline() {
+    const el = document.getElementById("online-panel");
+    if (!el) return;
+    el.outerHTML = renderOnline();
+    $("[data-online-refresh]")?.addEventListener("click", onlineLoad);
+  }
+  setInterval(() => { if (document.getElementById("online-panel") && document.visibilityState === "visible") onlineLoad(); }, 30000);
+  function renderOnline() {
+    const O = S.online, rows = O.rows || [], me = String(S.user?.email || "").toLowerCase();
+    const lv = r => window.ROLES[r]?.level || 0;
+    const byLevel = [5, 4, 3, 2, 1].map(n => [n, rows.filter(r => lv(r.role) === n).length]).filter(([, c]) => c);
+    return `<section class="panel" id="online-panel"><div class="panel-head"><div><h2>ผู้ใช้งานออนไลน์ตอนนี้ <span class="tag tag-dark">Admin Only</span></h2>
+      <p>ผู้ที่เปิดเว็บอยู่และมีสัญญาณภายใน ${ONLINE_MIN} นาที · อัปเดตเองทุก 30 วินาที${S.app?.app_open === false ? " · ขณะปิด Web app ผู้ใช้ Level 1-3 ไม่ถูกนับ" : ""}</p></div>
+      <div class="toolbar"><button class="btn" data-online-refresh ${O.loading ? "disabled" : ""}>${O.loading ? "กำลังโหลด..." : "Refresh"}</button></div></div>
+      <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-green">ออนไลน์ ${O.rows ? rows.length : "-"} คน</span>
+        ${byLevel.map(([n, c]) => `<span class="tag">Level ${n} · ${esc(Object.values(window.ROLES).find(r => r.level === n)?.label || "")}: ${c}</span>`).join("")}
+        ${O.at ? `<span class="small muted">ข้อมูล ณ ${esc(bkkTime(O.at))} (เวลาไทย)</span>` : ""}</div>
+      ${O.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(O.error)}</div>` : ""}
+      <div class="table-wrap" style="max-height:420px"><table class="grid compact"><thead><tr><th>ผู้ใช้</th><th>Access Level</th><th>แผนก</th><th>หน้าที่เปิดอยู่</th><th>เริ่มใช้งานรอบนี้</th><th>ใช้งานล่าสุด</th><th>Microsoft sign-in ล่าสุด</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td><span class="online-dot"></span><b>${esc(r.display_name || r.email)}</b>${String(r.email).toLowerCase() === me ? ` <span class="tag">คุณ</span>` : ""}<div class="small muted">${esc(r.email)}</div></td>
+        <td>${lv(r.role) ? `${lv(r.role)} · ${esc(window.ROLES[r.role].label)}` : esc(r.role || "-")}</td><td>${esc(r.department || "-")}</td><td>${esc(pageLabel(r.page))}</td>
+        <td>${r.started_at ? esc(bkkTime(r.started_at)) : "-"}</td><td>${esc(ago(r.last_seen_at))}</td><td>${r.last_sign_in_at ? esc(bkkTime(r.last_sign_in_at)) : "-"}</td></tr>`).join("")
+        || `<tr><td colspan="7" class="empty">${O.loading || !O.rows && !O.error ? "กำลังโหลด..." : O.error ? "-" : "ไม่มีผู้ใช้ออนไลน์"}</td></tr>`}</tbody></table></div></section>`;
   }
 
   // ───────────── LINE Notification (Edge Function line-notify, Level 4-5) ─────────────
@@ -1952,6 +2010,7 @@
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     bindLine(root);
+    if (document.getElementById("online-panel")) { $("[data-online-refresh]", root)?.addEventListener("click", onlineLoad); if (!S.online.rows && !S.online.loading) setTimeout(onlineLoad, 0); }
     $("[data-app-switch]", root)?.addEventListener("click", async () => {
       const open = S.app?.app_open !== false;
       const msg = $("#appCloseMsg", root)?.value || "";
@@ -1997,7 +2056,7 @@
     });
     $("#logoutBtn").addEventListener("click", async () => {
       $$(".toast").forEach(t => t.remove());
-      await window.Store.signOut(); S.user = null; ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
+      clearInterval(beatTimer); await window.Store.signOut(); S.user = null; ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
     });
     try { S.user = await window.Store.currentUser(); } catch (e) { S.user = null; showLoginError(e.message); }
     if (S.user) await enterApp();
