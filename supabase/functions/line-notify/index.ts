@@ -17,7 +17,8 @@ function cors(req: Request) {
   const origin = req.headers.get("Origin") || "";
   return {
     "Access-Control-Allow-Origin": allowed.includes("*") ? "*" : allowed.includes(origin) ? origin : allowed[0],
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-key",
+    // Echo the headers the browser asks for, so a newer supabase-js header never breaks the preflight
+    "Access-Control-Allow-Headers": req.headers.get("Access-Control-Request-Headers") || "authorization, x-client-info, apikey, content-type, x-cron-key",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Vary": "Origin"
   };
