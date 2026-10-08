@@ -80,6 +80,17 @@
       return (this.outbox[payload.requestId] = { success: true, state: "done", sent: true, demo: true, sentAt: new Date().toISOString() });
     }
     // Admins (Level 4-5) who approve Due Date requests
+    // On/Off switches (015_app_switch.sql); demo keeps them in the browser
+    async appStatus() { return { app_open: true, ...(this.db.app_settings || [])[0] }; }
+    async setAppOpen(open, message) {
+      this.db.app_settings = [{ app_open: open, closed_message: open ? null : (message || null), changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, changed_at: new Date().toISOString() }];
+      this.persist();
+    }
+    async lineAutoStatus() { return { auto_enabled: false, ...(this.db.line_settings || [])[0] }; }
+    async setLineAuto(enabled) {
+      this.db.line_settings = [{ ...(this.db.line_settings || [])[0], auto_enabled: enabled, auto_changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, auto_changed_at: new Date().toISOString() }];
+      this.persist();
+    }
     async approvers() { return this.db.user_access.filter(u => u.active !== false && (u.role === "admin" || u.role === "root")).map(u => ({ email: u.email, display_name: u.display_name })); }
     async update(table, key, patch) {
       const k = KEYS[table];
@@ -323,6 +334,25 @@
       if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้ง Edge Function line-notify หรือเชื่อมต่อไม่ได้: ${message}`;
       if (/line_settings/.test(message)) message = `ยังไม่ได้รัน SQL 014_line_notify.sql (${message})`;
       throw new Error(message);
+    }
+    // On/Off switches (015_app_switch.sql). Before 015 is run the web app counts as open.
+    async appStatus() {
+      const { data, error } = await this.client.rpc("app_status");
+      if (error) return { app_open: true, missing: true };
+      return (Array.isArray(data) ? data[0] : data) || { app_open: true };
+    }
+    async setAppOpen(open, message) {
+      const { error } = await this.client.rpc("set_app_open", { open, message: message || null });
+      if (error) throw new Error(/set_app_open/.test(error.message) ? "ยังไม่ได้รัน SQL 015_app_switch.sql" : error.message);
+    }
+    async lineAutoStatus() {
+      const { data, error } = await this.client.rpc("line_auto_status");
+      if (error) return null;
+      return (Array.isArray(data) ? data[0] : data) || null;
+    }
+    async setLineAuto(enabled) {
+      const { error } = await this.client.rpc("set_line_auto", { enabled });
+      if (error) throw new Error(/set_line_auto/.test(error.message) ? "ยังไม่ได้รัน SQL 015_app_switch.sql" : error.message);
     }
     async approvers() {
       const { data, error } = await this.client.rpc("approver_emails");
