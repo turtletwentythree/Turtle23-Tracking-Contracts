@@ -1716,14 +1716,14 @@
   }
   async function lineLoad() {
     const L = S.line; if (L.loading) return;
-    L.loading = true; L.error = ""; paintLine();
+    L.loading = true; L.error = ""; L.dataAt = S.loadedAt; paintLine();
     try {
       L.auto = await window.Store.lineAutoStatus() || (L.status ? { auto_enabled: L.status.autoEnabled } : null);
       L.status = await lineCall({ mode: "status" });
       if (!L.auto) L.auto = { auto_enabled: Boolean(L.status?.autoEnabled), missing: true };
       L.preview = await lineCall({ mode: "preview" });
     } catch (e) { L.error = e.message || String(e); }
-    L.loading = false; L.loaded = true; paintLine();
+    L.loading = false; L.loaded = true; L.at = new Date(); paintLine();
   }
   function paintLine() {
     const el = document.getElementById("line-panel");
@@ -1743,6 +1743,14 @@
     const res = L.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${L.result.failed ? "ส่งไม่ครบ" : L.result.demo ? "จำลองการส่งเรียบร้อย (Demo ไม่ได้ส่งจริง)" : "ส่ง LINE เรียบร้อย"}</b>
       <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}: ${esc((L.result.errors || []).join(" | "))}` : ""}</div></div>` : "";
     const busy = L.loading || L.sending;
+    // Same count as the Admin Dashboard (all departments, all classifications) from the data in this page
+    const dashToday = todayISO(), dashSeen = new Set(), dash = { Y: 0, R: 0 };
+    S.db.contracts.filter(c => !dashSeen.has(c.id) && dashSeen.add(c.id)).map(c => contractState(c, dashToday))
+      .forEach(x => { if (x.kind === "open" && (x.code === "Y" || x.code === "R")) dash[x.code]++; });
+    const same = pv?.counts && pv.counts.Y === dash.Y && pv.counts.R === dash.R && (pv.today || dashToday) === dashToday;
+    const match = !pv?.counts ? "" : same ? `<span class="tag tag-green">ตรงกับ Dashboard</span>`
+      : `<span class="tag tag-red">ไม่ตรงกับ Dashboard</span> <span class="small">Dashboard: Y ${dash.Y} · R ${dash.R} · LINE: Y ${pv.counts.Y} · R ${pv.counts.R}${pv.today && pv.today !== dashToday ? ` (LINE คิดวันที่ ${esc(pv.today)})` : ""}.
+        กด Refresh Preview ถ้ายังไม่ตรง แปลว่า line-notify บน Supabase เป็นเวอร์ชันเก่า: วาง line-notify-single-file.ts ล่าสุดแล้ว Deploy</span>`;
     // Master switch: 016 stores it in line_settings.sending_enabled; before 016 runs, the Edge Function status answers
     const sendOn = (L.auto && "sending_enabled" in L.auto ? L.auto.sending_enabled : st?.sendingEnabled) !== false;
     return `<section class="panel" id="line-panel"><div class="panel-head"><div><h2>LINE Notification <span class="tag tag-dark">Admin Only</span></h2><p>แจ้งเตือน Status Update Y=Delayed / R=Overdue เข้ากลุ่ม LINE ชุดเดียวกับ Dashboard</p></div>
@@ -1760,6 +1768,7 @@
         <tr><th>Group</th><td><b>${LINE_GROUP}</b></td></tr>
         <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · LINE Sending ${sendOn ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`} · Automatic ${L.auto?.auto_enabled ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`}</td></tr>
         <tr><th>Rules</th><td>ส่งเฉพาะ Y และ R · สัญญาที่ปิดแล้วไม่ส่ง · อัตโนมัติสูงสุด 1 ครั้งต่อสัญญาต่อวัน · Admin กด Send Now ส่งซ้ำได้ · สัญญาลับแสดงเฉพาะ Contract ID</td></tr>
+        <tr><th>Dashboard check</th><td>${match || `<span class="muted">${L.loading ? "กำลังตรวจสอบ..." : "-"}</span>`}${L.at ? ` <span class="small muted">· Preview ณ ${esc(bkkTime(L.at))} (เวลาไทย)</span>` : ""}</td></tr>
         <tr><th>Last run</th><td>${esc(last)}</td></tr>
       </tbody></table></div>
       ${L.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(L.error)}</div>` : ""}${res}
@@ -1777,8 +1786,13 @@
   }
   function bindLine(root) {
     const L = S.line;
-    if (!L.loaded && !L.loading && document.getElementById("line-panel")) setTimeout(lineLoad, 0);
-    $("[data-line-refresh]", root)?.addEventListener("click", () => { L.result = null; lineLoad(); });
+    // Load on first open, and again whenever the page data was reloaded since (the Dashboard refreshes the same way)
+    if ((!L.loaded || L.dataAt !== S.loadedAt) && !L.loading && document.getElementById("line-panel")) setTimeout(lineLoad, 0);
+    // Refresh reloads the page data too, so the Dashboard check compares the same moment
+    $("[data-line-refresh]", root)?.addEventListener("click", async () => {
+      L.result = null;
+      try { await reload(); render(); } catch (e) { lineLoad(); }
+    });
     $("[data-line-view]", root)?.addEventListener("click", () => { L.showMsg = !L.showMsg; paintLine(); });
     $("[data-line-sending]", root)?.addEventListener("click", async () => {
       const cur = (L.auto && "sending_enabled" in L.auto ? L.auto.sending_enabled : L.status?.sendingEnabled) !== false, on = !cur;

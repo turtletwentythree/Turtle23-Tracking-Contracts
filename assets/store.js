@@ -7,7 +7,7 @@
     contracts: "id", contract_logs: "id", departments: "name", people: "name",
     contract_types: "id", action_sla: "action", due_date_requests: "id",
     user_access: "email", profiles: "id", entra_role_mappings: "claim_value", access_audit: "id",
-    contract_templates: "id", log_view_columns: "section,key", master_audit: "id"
+    contract_templates: "id", log_view_columns: "section,key", master_audit: "id", attachment_links: "file_id"
   };
   // Loaded when the database has them (005, 007, 008); without them the app keeps working
   const OPTIONAL = ["contract_templates", "log_view_columns", "master_audit", "attachment_links"];
@@ -325,16 +325,23 @@
     }
     async loadAll() {
       const out = {};
-      await Promise.all(TABLES.map(async t => {
-        const { data, error } = await this.client.from(t).select("*").limit(10000);
-        if (error) throw error;
-        out[t] = data;
-      }));
+      // Supabase returns at most 1000 rows per request: read each table in pages ordered by its key
+      const all = async t => {
+        const rows = [], keys = (KEYS[t] || "").split(",").filter(Boolean);
+        for (let from = 0; ; from += 1000) {
+          let q = this.client.from(t).select("*");
+          keys.forEach(k => { q = q.order(k, { ascending: true }); });
+          const { data, error } = await q.range(from, from + 999);
+          if (error) throw error;
+          rows.push(...(data || []));
+          if (!data || data.length < 1000) return rows;
+        }
+      };
+      await Promise.all(TABLES.map(async t => { out[t] = await all(t); }));
       // Templates (005), Log View headers (007) and master history (008, Level 4+); skipped when the table is missing
       await Promise.all(OPTIONAL.map(async t => {
-        let q = this.client.from(t).select("*");
-        q = t === "master_audit" ? q.order("changed_at", { ascending: false }).limit(500) : q.limit(10000);
-        const { data, error } = await q;
+        if (t !== "master_audit") { try { out[t] = await all(t); } catch (e) { /* table not created yet */ } return; }
+        const { data, error } = await this.client.from(t).select("*").order("changed_at", { ascending: false }).limit(500);
         if (!error) out[t] = data;
       }));
       return out;

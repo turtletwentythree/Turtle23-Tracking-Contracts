@@ -58,13 +58,21 @@ async function settings(db: any) {
 const groupId = (deps: Deps, s: any) => String(deps.env("LINE_GROUP_ID") || s.group_id || "").trim();
 
 async function loadAll(db: any) {
-  const table = async (name: string, optional = false) => {
-    const { data, error } = await db.from(name).select("*").limit(20000);
-    if (error) { if (optional) return []; throw new HttpError(500, `${name}: ${error.message}`); }
-    return data || [];
+  // Supabase returns at most 1000 rows per request, so read in pages (ordered by the key) until a short page
+  const PAGE = 1000;
+  const table = async (name: string, key: string | null, optional = false) => {
+    const all: any[] = [];
+    for (let from = 0; ; from += PAGE) {
+      let q = db.from(name).select("*");
+      if (key) q = q.order(key, { ascending: true });
+      const { data, error } = await q.range(from, from + PAGE - 1);
+      if (error) { if (optional) return []; throw new HttpError(500, `${name}: ${error.message}`); }
+      all.push(...(data || []));
+      if (!data || data.length < PAGE) return all;
+    }
   };
   const [contracts, contract_logs, action_sla, contract_types, holidays] = await Promise.all([
-    table("contracts"), table("contract_logs"), table("action_sla"), table("contract_types"), table("holidays", true)]);
+    table("contracts", "id"), table("contract_logs", "id"), table("action_sla", "action"), table("contract_types", "id"), table("holidays", null, true)]);
   return { contracts, contract_logs, action_sla, contract_types, holidays };
 }
 
