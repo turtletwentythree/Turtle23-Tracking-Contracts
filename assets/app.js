@@ -630,11 +630,13 @@
     const list = Array.isArray(l) ? l : lf(l, "attachments");
     const stored = list.filter(a => a && a.path).map(a => `<button type="button" class="log-file" data-file-path="${esc(a.path)}" data-file-name="${esc(a.fileName || "File")}"
       title="เปิดไฟล์ (${esc(fmtSize(a.fileSize))})">📎 ${esc(a.fileName || "File")}</button>`);
+    // Production files that only kept the folder get their own link from attachment_links (018) once it is filled
+    const links = S.db.attachment_links || [];
     const linked = list.filter(a => a && !a.path).map(a => {
-      const file = safeUrl(a.url || a.downloadUrl);
+      const file = safeUrl(a.url || a.downloadUrl) || safeUrl(links.find(k => a.fileId && k.file_id === a.fileId)?.url);
       return { name: a.originalFileName || a.fileName || "File", url: file || safeUrl(a.cloudFolderUrl), folder: !file };
     }).filter(a => a.url).map(f => `<a class="log-file" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"
-      title="${f.folder ? "เปิดโฟลเดอร์ใน Google Drive" : "เปิดไฟล์ใน Google Drive"}">${f.folder ? "📁" : "📎"} ${esc(f.name)}</a>`);
+      title="${f.folder ? "ยังไม่มีลิงก์ของไฟล์นี้โดยตรง: เปิดโฟลเดอร์ของสัญญาใน Google Drive แล้วเลือกไฟล์" : "เปิดไฟล์ใน Google Drive"}">${f.folder ? "📁" : "📎"} ${esc(f.name)}${f.folder ? ` <span class="small muted">(โฟลเดอร์)</span>` : ""}</a>`);
     const all = [...stored, ...linked];
     return all.length ? `<div class="log-files">${all.join("")}</div>` : "";
   }

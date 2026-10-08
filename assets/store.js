@@ -10,7 +10,7 @@
     contract_templates: "id", log_view_columns: "section,key", master_audit: "id"
   };
   // Loaded when the database has them (005, 007, 008); without them the app keeps working
-  const OPTIONAL = ["contract_templates", "log_view_columns", "master_audit"];
+  const OPTIONAL = ["contract_templates", "log_view_columns", "master_audit", "attachment_links"];
   const BUCKET = "attachments";
   // Master tables and logs that remember hand edits (008_master_data.sql, 009_log_edit.sql): locked rows are skipped by Import
   const TRACKED = ["departments", "people", "contract_types", "action_sla", "contract_templates", "log_view_columns", "contract_logs"];

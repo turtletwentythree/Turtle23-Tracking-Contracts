@@ -50,6 +50,7 @@ supabase/migrations/014_line_notify.sql  LINE Notification: ตั้งค่�
 supabase/migrations/015_app_switch.sql  สวิตช์เปิด/ปิด: การเข้าใช้งาน Web app (Level 1-3, บังคับในฐานข้อมูล) และการส่ง LINE อัตโนมัติ พร้อมประวัติ
 supabase/migrations/016_line_sending.sql  สวิตช์หลัก “การส่ง LINE Notification” เปิด/ปิด (ปิดแล้วไม่ส่งเลยทั้งอัตโนมัติและ Send Now) พร้อมผู้เปลี่ยนล่าสุด
 supabase/migrations/017_user_presence.sql  ผู้ใช้งานออนไลน์ตอนนี้ (Admin Tools): สัญญาณทุก 1 นาที ไม่เก็บ IP ขณะปิด Web app ไม่นับ Level 1-3
+supabase/migrations/018_attachment_links.sql  ลิงก์ตรงของไฟล์แนบเก่าที่มีแค่โฟลเดอร์ (เติมด้วย supabase/attachment-links/ ดู README-TH.md)
 supabase/functions/send-email/      Edge Function ส่งอีเมล (Resend หรือ Microsoft Graph) วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/line-notify/     Edge Function แจ้งเตือน Y/R เข้ากลุ่ม LINE ทุกวันทำการ 09:30 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/_shared/sla-engine.js  กฎ SLA ชุดเดียวที่ทั้งเว็บและ LINE ใช้ร่วมกัน
