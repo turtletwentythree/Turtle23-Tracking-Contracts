@@ -86,7 +86,11 @@
       this.db.app_settings = [{ app_open: open, closed_message: open ? null : (message || null), changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, changed_at: new Date().toISOString() }];
       this.persist();
     }
-    async lineAutoStatus() { return { auto_enabled: false, ...(this.db.line_settings || [])[0] }; }
+    async lineAutoStatus() { return { auto_enabled: false, sending_enabled: true, ...(this.db.line_settings || [])[0] }; }
+    async setLineSending(enabled) {
+      this.db.line_settings = [{ ...(this.db.line_settings || [])[0], sending_enabled: enabled, sending_changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, sending_changed_at: new Date().toISOString() }];
+      this.persist();
+    }
     async setLineAuto(enabled) {
       this.db.line_settings = [{ ...(this.db.line_settings || [])[0], auto_enabled: enabled, auto_changed_by: JSON.parse(storage.getItem(this.sessionKey) || "{}").email, auto_changed_at: new Date().toISOString() }];
       this.persist();
@@ -353,6 +357,10 @@
     async setLineAuto(enabled) {
       const { error } = await this.client.rpc("set_line_auto", { enabled });
       if (error) throw new Error(/set_line_auto/.test(error.message) ? "ยังไม่ได้รัน SQL 015_app_switch.sql" : error.message);
+    }
+    async setLineSending(enabled) {
+      const { error } = await this.client.rpc("set_line_sending", { enabled });
+      if (error) throw Object.assign(new Error(/set_line_sending/.test(error.message) ? "ยังไม่ได้รัน SQL 016_line_sending.sql" : error.message), { missing: /set_line_sending/.test(error.message) });
     }
     async approvers() {
       const { data, error } = await this.client.rpc("approver_emails");

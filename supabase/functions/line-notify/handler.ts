@@ -1,6 +1,6 @@
 // line-notify: LINE notification of Y=Delayed and R=Overdue contracts to the group "T23_Tracking Contract".
 // Requests:
-//   { mode: "status" | "preview" | "send" | "setAuto", enabled? }  from Admin Tools (Level 4-5, signed in)
+//   { mode: "status" | "preview" | "send" | "setAuto" | "setSending", enabled? }  from Admin Tools (Level 4-5, signed in)
 //   { mode: "scheduled" } + header x-cron-key                       from pg_cron, Mon-Fri 09:30 Asia/Bangkok
 //   LINE webhook (body has "events", URL has ?key=LINE_WEBHOOK_KEY)   remembers the group id when the bot is in a group
 // Rules (same as the Production system):
@@ -8,6 +8,7 @@
 //     so the queue is exactly the Y + R of the Admin Dashboard
 //   * Scheduled run: a contract is sent at most once per day (line_notifications), and only when Automatic is On
 //   * Admin Send Now: sends every Y / R again (resend allowed)
+//   * Master switch line_settings.sending_enabled = false: nothing is sent at all (scheduled or Send Now)
 //   * One run at a time (line_settings.run_lock_until)
 // No token is ever sent to the browser: LINE_CHANNEL_ACCESS_TOKEN, LINE_GROUP_ID, LINE_WEBHOOK_KEY are Supabase secrets.
 import { buildPushes, shown, type Candidate } from "./flex.ts";
@@ -134,6 +135,7 @@ async function run(deps: Deps, db: any, source: "scheduled" | "admin", by: strin
   const now = (deps.now || (() => new Date()))();
   const today = bkk.format(now);
   const s = await settings(db);
+  if (s.sending_enabled === false) throw new HttpError(409, "LINE sending is Off. Turn it On in Admin Tools first. / การส่ง LINE ปิดอยู่");
   const to = groupId(deps, s);
   if (!to) throw new HttpError(400, "No LINE group yet: set LINE_GROUP_ID, or add the bot to the group and send a message there.");
   const result = await withLock(deps, db, async () => {
@@ -180,6 +182,7 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
     if (!req.cronKey || req.cronKey !== s.cron_key) throw new HttpError(401, "Invalid schedule key.");
     const now = (deps.now || (() => new Date()))();
     if (/Sat|Sun/.test(bkkWeekday.format(now))) return { success: true, skipped: "weekend" };
+    if (s.sending_enabled === false) return { success: true, skipped: "sending is off" };
     if (!s.auto_enabled) return { success: true, skipped: "automatic is off" };
     return run(deps, db, "scheduled", "schedule 09:30");
   }
@@ -191,7 +194,7 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
       success: true, groupName: GROUP_NAME, tokenSet: Boolean(deps.env("LINE_CHANNEL_ACCESS_TOKEN")),
       groupSet: Boolean(groupId(deps, s)), groupSource: deps.env("LINE_GROUP_ID") ? "secret" : s.group_id ? "webhook" : "none",
       groupCapturedAt: s.group_captured_at, webhookKeySet: Boolean(deps.env("LINE_WEBHOOK_KEY")),
-      autoEnabled: Boolean(s.auto_enabled), lastRunAt: s.last_run_at, lastRun: s.last_run
+      autoEnabled: Boolean(s.auto_enabled), sendingEnabled: s.sending_enabled !== false, lastRunAt: s.last_run_at, lastRun: s.last_run
     };
   }
   if (mode === "preview") {
@@ -206,6 +209,13 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
     const { error } = await db.from("line_settings").update({ auto_enabled: payload.enabled === true }).eq("id", 1);
     if (error) throw new HttpError(500, error.message);
     return { success: true, autoEnabled: payload.enabled === true };
+  }
+  if (mode === "setSending") {
+    const on = payload.enabled === true;
+    const { error } = await db.from("line_settings")
+      .update({ sending_enabled: on, sending_changed_by: by, sending_changed_at: new Date().toISOString() }).eq("id", 1);
+    if (error) throw new HttpError(500, error.message);
+    return { success: true, sendingEnabled: on };
   }
   throw new HttpError(400, "Unknown mode.");
 }

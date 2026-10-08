@@ -48,6 +48,7 @@ supabase/migrations/012_email_outbox.sql email_outbox: กันอีเมล�
 supabase/migrations/013_own_cases.sql    User Case Action: Level 1-3 ทำได้เฉพาะเคสที่ตัวเองเป็น Contract Owner หรือ Station Owner
 supabase/migrations/014_line_notify.sql  LINE Notification: ตั้งค่า (Automatic เริ่มที่ Off) และบันทึกการส่ง (สูงสุดวันละ 1 ครั้งต่อสัญญา)
 supabase/migrations/015_app_switch.sql  สวิตช์เปิด/ปิด: การเข้าใช้งาน Web app (Level 1-3, บังคับในฐานข้อมูล) และการส่ง LINE อัตโนมัติ พร้อมประวัติ
+supabase/migrations/016_line_sending.sql  สวิตช์หลัก “การส่ง LINE Notification” เปิด/ปิด (ปิดแล้วไม่ส่งเลยทั้งอัตโนมัติและ Send Now) พร้อมผู้เปลี่ยนล่าสุด
 supabase/functions/send-email/      Edge Function ส่งอีเมล (Resend หรือ Microsoft Graph) วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/line-notify/     Edge Function แจ้งเตือน Y/R เข้ากลุ่ม LINE ทุกวันทำการ 09:30 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/_shared/sla-engine.js  กฎ SLA ชุดเดียวที่ทั้งเว็บและ LINE ใช้ร่วมกัน

@@ -200,7 +200,7 @@
   }
 
   // ───────────── Router & shell ─────────────
-  // Off blocks Level 1-3 only. Admin and Root stay signed in so they can reopen the app.
+  // Web app switched Off (Admin Tools): Level 1-3 see only this page; the database refuses their reads and writes too
   const closedForMe = () => S.app?.app_open === false && level() < 4;
   function renderClosed() {
     $("#nav").innerHTML = "";
@@ -268,7 +268,7 @@
     const view = $("#view");
     const fn = { dashboard: renderDashboard, contracts: () => renderContracts("contracts"), confidential: () => renderContracts("confidential"),
       user: renderUserCase, master: renderMaster, admin: renderAdmin }[S.view];
-    view.innerHTML = (S.app?.app_open === false ? `<div class="app-closed-banner">ระบบปิดสำหรับผู้ใช้ Level 1-3 อยู่ · เปิดได้ที่ Admin Tools &gt; Web App Access</div>` : "") + fn();
+    view.innerHTML = (S.app?.app_open === false ? `<div class="app-closed-banner">ระบบปิดสำหรับผู้ใช้ Level 1-3 อยู่ · เปิดได้ที่ Admin Tools > Web App Access</div>` : "") + fn();
     bindView(view);
   }
 
@@ -1610,7 +1610,7 @@
     ${renderLine()}`;
   }
 
-  // ───────────── Web App Access (Level 4-5) ─────────────
+  // ───────────── On/Off switches ─────────────
   const bkkTime = at => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
   const stamp = (by, at) => at ? `เปลี่ยนล่าสุด ${bkkTime(at)} (เวลาไทย)${by ? ` โดย ${by}` : ""}` : "ยังไม่เคยเปลี่ยน";
   function switchCard({ attr, on, title, sub, onLabel, offLabel, meta, disabled }) {
@@ -1619,9 +1619,10 @@
       <span class="switch-state" style="color:${on ? "#2E9E5B" : "#C62828"}">${on ? onLabel : offLabel}</span>
       <button class="switch ${on ? "on" : ""}" ${attr} role="switch" aria-checked="${on}" ${disabled ? "disabled" : ""} title="${on ? "กดเพื่อปิด" : "กดเพื่อเปิด"}"></button></div>`;
   }
+  // Web App Access: Off = Level 1-3 cannot use the website (enforced in the database by 015_app_switch.sql)
   function renderAppSwitch() {
     const a = S.app || { app_open: true }, open = a.app_open !== false;
-    return `<section class="panel"><div class="panel-head"><div><h2>Web App Access <span class="tag tag-dark">Admin Only</span></h2><p>เปิด/ปิดการเข้าใช้งานเว็บของผู้ใช้ Level 1-3 โดยไม่กระทบ LINE Notification</p></div></div>
+    return `<section class="panel"><div class="panel-head"><div><h2>Web App Access <span class="tag tag-dark">Admin Only</span></h2><p>เปิด/ปิดการเข้าใช้งานเว็บของผู้ใช้ Level 1-3 (Admin และ Root ยังเข้าได้เสมอ) โดยไม่กระทบ LINE Notification</p></div></div>
       ${a.missing ? `<div class="login-error show" style="margin:0 18px 12px">ยังไม่ได้รัน SQL 015_app_switch.sql จึงยังปิดระบบไม่ได้</div>` : ""}
       ${switchCard({ attr: "data-app-switch", on: open, title: "การเข้าใช้งาน Web app", sub: open ? "ผู้ใช้ทุกคนเข้าใช้งานได้ตามสิทธิ์" : "ผู้ใช้ Level 1-3 เห็นหน้า “ระบบปิดใช้งานชั่วคราว” และอ่าน/แก้ข้อมูลไม่ได้",
         onLabel: "เปิดใช้งาน", offLabel: "ปิดอยู่", meta: stamp(a.changed_by, a.changed_at), disabled: a.missing })}
@@ -1637,9 +1638,9 @@
   S.line = { status: null, preview: null, loading: false, sending: false, error: "", result: null, loaded: false };
   function lineDemo(body) {
     const today = todayISO();
-    if (body.mode === "status") return { success: true, demo: true, groupName: LINE_GROUP, tokenSet: false, groupSet: false, groupSource: "none", sendingEnabled: S.line.status?.sendingEnabled !== false, autoEnabled: Boolean(S.line.status?.autoEnabled), lastRun: S.line.status?.lastRun || null };
-    if (body.mode === "setSending") return { success: true, sendingEnabled: body.enabled === true };
+    if (body.mode === "status") return { success: true, demo: true, groupName: LINE_GROUP, tokenSet: false, groupSet: false, groupSource: "none", autoEnabled: Boolean(S.line.auto?.auto_enabled), sendingEnabled: S.line.auto?.sending_enabled !== false, lastRun: S.line.status?.lastRun || null };
     if (body.mode === "setAuto") return { success: true, autoEnabled: body.enabled === true };
+    if (body.mode === "setSending") return { success: true, sendingEnabled: body.enabled === true };
     const seen = new Set();
     const rows = S.db.contracts.filter(c => !seen.has(c.id) && seen.add(c.id)).map(c => contractState(c, today)).filter(x => x.kind === "open" && (x.code === "Y" || x.code === "R"))
       .sort((a, b) => (a.code === b.code ? 0 : a.code === "R" ? -1 : 1) || b.acc - a.acc || a.c.id.localeCompare(b.c.id))
@@ -1657,7 +1658,9 @@
     const L = S.line; if (L.loading) return;
     L.loading = true; L.error = ""; paintLine();
     try {
+      L.auto = await window.Store.lineAutoStatus() || (L.status ? { auto_enabled: L.status.autoEnabled } : null);
       L.status = await lineCall({ mode: "status" });
+      if (!L.auto) L.auto = { auto_enabled: Boolean(L.status?.autoEnabled), missing: true };
       L.preview = await lineCall({ mode: "preview" });
     } catch (e) { L.error = e.message || String(e); }
     L.loading = false; L.loaded = true; paintLine();
@@ -1680,18 +1683,22 @@
     const res = L.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${L.result.failed ? "ส่งไม่ครบ" : L.result.demo ? "จำลองการส่งเรียบร้อย (Demo ไม่ได้ส่งจริง)" : "ส่ง LINE เรียบร้อย"}</b>
       <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}: ${esc((L.result.errors || []).join(" | "))}` : ""}</div></div>` : "";
     const busy = L.loading || L.sending;
+    // Master switch: 016 stores it in line_settings.sending_enabled; before 016 runs, the Edge Function status answers
+    const sendOn = (L.auto && "sending_enabled" in L.auto ? L.auto.sending_enabled : st?.sendingEnabled) !== false;
     return `<section class="panel" id="line-panel"><div class="panel-head"><div><h2>LINE Notification <span class="tag tag-dark">Admin Only</span></h2><p>แจ้งเตือน Status Update Y=Delayed / R=Overdue เข้ากลุ่ม LINE ชุดเดียวกับ Dashboard</p></div>
       <div class="toolbar"><button class="btn" data-line-view ${pv ? "" : "disabled"}>${L.showMsg ? "ซ่อนข้อความ LINE" : "ดูข้อความ LINE"}</button>
       <button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
-      <button class="btn btn-primary" data-line-send ${busy || st?.sendingEnabled === false || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
-      ${switchCard({ attr: `data-line-sending="${st?.sendingEnabled === false ? "on" : "off"}"`, on: st?.sendingEnabled !== false,
-        title: "LINE Notification Sending", sub: "ควบคุมการส่งอัตโนมัติและ Send Now โดยไม่กระทบการเข้าใช้งาน Web app",
-        onLabel: "เปิดใช้งาน", offLabel: "ปิดอยู่", meta: st ? "ตั้งค่าการส่ง LINE ของระบบ" : "กำลังโหลดสถานะ...", disabled: !st || busy })}
+      <button class="btn btn-primary" data-line-send ${busy || !sendOn || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
+      ${switchCard({ attr: "data-line-sending", on: sendOn, title: "การส่ง LINE Notification",
+        sub: sendOn ? "เปิดอยู่: ส่งได้ทั้งอัตโนมัติ 09:30 และ Send Now" : "ปิดอยู่: ไม่มีข้อความใดถูกส่งเข้ากลุ่ม LINE (ทั้งอัตโนมัติและ Send Now)",
+        onLabel: "เปิดส่ง", offLabel: "ปิดส่ง", meta: L.auto && "sending_enabled" in L.auto ? stamp(L.auto.sending_changed_by, L.auto.sending_changed_at) : L.auto || st ? "" : "กำลังโหลด...", disabled: (!L.auto && !st) || busy })}
+      ${switchCard({ attr: "data-line-auto", on: Boolean(L.auto?.auto_enabled), title: "ส่ง LINE Noti อัตโนมัติ 09:30",
+        sub: !sendOn ? "ไม่มีผลขณะปิดการส่ง LINE Notification ด้านบน" : L.auto?.auto_enabled ? "ระบบจะส่ง Y/R เข้ากลุ่มทุกวันจันทร์–ศุกร์ 09:30" : "ไม่ส่งอัตโนมัติ (ยังกด Send Now เองได้)",
+        onLabel: "เปิดส่ง", offLabel: "ปิดส่ง", meta: L.auto ? stamp(L.auto.auto_changed_by, L.auto.auto_changed_at) : "กำลังโหลด...", disabled: !L.auto || busy })}
       <div class="table-wrap" style="padding:0 18px 12px"><table class="grid compact"><tbody>
         <tr><th style="width:220px">LINE Connection</th><td>${conn}</td></tr>
         <tr><th>Group</th><td><b>${LINE_GROUP}</b></td></tr>
-        <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · Automatic
-          <button class="btn btn-sm ${st?.autoEnabled ? "btn-green" : ""}" data-line-auto="${st?.autoEnabled ? "off" : "on"}" ${!st || busy ? "disabled" : ""}>${st?.autoEnabled ? "On · กดเพื่อปิด" : "Off · กดเพื่อเปิด"}</button></td></tr>
+        <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · LINE Sending ${sendOn ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`} · Automatic ${L.auto?.auto_enabled ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`}</td></tr>
         <tr><th>Rules</th><td>ส่งเฉพาะ Y และ R · สัญญาที่ปิดแล้วไม่ส่ง · อัตโนมัติสูงสุด 1 ครั้งต่อสัญญาต่อวัน · Admin กด Send Now ส่งซ้ำได้ · สัญญาลับแสดงเฉพาะ Contract ID</td></tr>
         <tr><th>Last run</th><td>${esc(last)}</td></tr>
       </tbody></table></div>
@@ -1713,21 +1720,27 @@
     if (!L.loaded && !L.loading && document.getElementById("line-panel")) setTimeout(lineLoad, 0);
     $("[data-line-refresh]", root)?.addEventListener("click", () => { L.result = null; lineLoad(); });
     $("[data-line-view]", root)?.addEventListener("click", () => { L.showMsg = !L.showMsg; paintLine(); });
-    $("[data-line-sending]", root)?.addEventListener("click", async e => {
-      const on = e.currentTarget.dataset.lineSending === "on";
-      if (!on && !armed(e.currentTarget, "กดอีกครั้งเพื่อปิดการส่ง LINE")) return;
+    $("[data-line-sending]", root)?.addEventListener("click", async () => {
+      const cur = (L.auto && "sending_enabled" in L.auto ? L.auto.sending_enabled : L.status?.sendingEnabled) !== false, on = !cur;
+      if (!on && !confirm("ปิดการส่ง LINE Notification?\nจะไม่มีข้อความเข้ากลุ่ม T23_Tracking Contract เลย ทั้งอัตโนมัติ 09:30 และ Send Now จนกว่าจะเปิดอีกครั้ง")) return;
+      if (on && !confirm("เปิดการส่ง LINE Notification?\nAdmin กด Send Now ได้ และถ้าเปิดอัตโนมัติไว้ ระบบจะส่งตอน 09:30")) return;
       try {
-        const r = await lineCall({ mode: "setSending", enabled: on });
-        L.status = { ...L.status, sendingEnabled: r.sendingEnabled };
-        toast(r.sendingEnabled ? "เปิดการส่ง LINE Notification แล้ว" : "ปิดการส่ง LINE Notification แล้ว");
+        try { await window.Store.setLineSending(on); }
+        catch (err) { if (!err.missing && window.Store.mode !== "demo") throw err; await lineCall({ mode: "setSending", enabled: on }); }
+        L.auto = await window.Store.lineAutoStatus() || L.auto;
+        if (L.auto && !("sending_enabled" in L.auto)) L.status = await lineCall({ mode: "status" });
+        toast(on ? "เปิดการส่ง LINE Notification แล้ว" : "ปิดการส่ง LINE Notification แล้ว");
       } catch (err) { L.error = err.message; }
       paintLine();
     });
     $("[data-line-auto]", root)?.addEventListener("click", async e => {
-      const on = e.currentTarget.dataset.lineAuto === "on";
-      if (on && !armed(e.currentTarget, "กดอีกครั้ง: เปิดส่งอัตโนมัติ 09:30")) return;
-      try { const r = await lineCall({ mode: "setAuto", enabled: on }); L.status = { ...L.status, autoEnabled: r.autoEnabled }; toast(r.autoEnabled ? "เปิดส่งอัตโนมัติแล้ว" : "ปิดส่งอัตโนมัติแล้ว"); }
-      catch (err) { L.error = err.message; }
+      const on = !L.auto?.auto_enabled;
+      if (on && !confirm("เปิดส่ง LINE Noti อัตโนมัติ?\nระบบจะส่ง Y/R เข้ากลุ่ม T23_Tracking Contract ทุกวันจันทร์–ศุกร์ 09:30\n(ปิด Trigger ของ Apps Script เดิมแล้วหรือยัง? ไม่อย่างนั้นจะได้ข้อความซ้ำ)")) return;
+      try {
+        if (L.auto?.missing) { await lineCall({ mode: "setAuto", enabled: on }); L.auto = { auto_enabled: on, missing: true }; }
+        else { await window.Store.setLineAuto(on); L.auto = await window.Store.lineAutoStatus(); }
+        toast(on ? "เปิดส่ง LINE อัตโนมัติแล้ว" : "ปิดส่ง LINE อัตโนมัติแล้ว");
+      } catch (err) { L.error = err.message; }
       paintLine();
     });
     $("[data-line-send]", root)?.addEventListener("click", async e => {

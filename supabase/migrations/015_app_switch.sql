@@ -71,7 +71,9 @@ end $$;
 alter table if exists public.line_settings add column if not exists auto_changed_by text;
 alter table if exists public.line_settings add column if not exists auto_changed_at timestamptz;
 
-create or replace function public.line_auto_status()
+-- dropped first so this file can run again after 016 widened the result
+drop function if exists public.line_auto_status();
+create function public.line_auto_status()
 returns table (auto_enabled boolean, auto_changed_by text, auto_changed_at timestamptz, last_run_at timestamptz, last_run jsonb)
 language plpgsql stable security definer set search_path = public as $$
 begin
