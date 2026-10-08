@@ -143,7 +143,8 @@
 
   async function enterApp() {
     showLoginError("");
-    try { await reload(); } catch (e) { toast("โหลดข้อมูลไม่สำเร็จ: " + e.message, true); }
+    S.app = await window.Store.appStatus().catch(() => ({ app_open: true }));
+    if (S.app.app_open !== false || level() >= 4) { try { await reload(); } catch (e) { toast("โหลดข้อมูลไม่สำเร็จ: " + e.message, true); } }
     document.body.classList.add("auth-ready");
     const r = window.ROLES[S.user.role] || window.ROLES.viewer;
     $("#profileName").textContent = S.user.display_name || S.user.username;
@@ -199,7 +200,26 @@
   }
 
   // ───────────── Router & shell ─────────────
+  // Off blocks Level 1-3 only. Admin and Root stay signed in so they can reopen the app.
+  const closedForMe = () => S.app?.app_open === false && level() < 4;
+  function renderClosed() {
+    $("#nav").innerHTML = "";
+    $("#pageHeading").textContent = "ระบบปิดใช้งานชั่วคราว";
+    $("#pageSubheading").textContent = "Web app is temporarily closed";
+    $("#view").innerHTML = `<section class="panel"><div class="panel-body" style="padding:40px 24px;text-align:center">
+      <div style="font-size:42px">🔒</div><h2>ระบบปิดใช้งานชั่วคราว</h2>
+      <p>${esc(S.app.closed_message || "ผู้ดูแลระบบปิดการใช้งานเว็บไว้ชั่วคราว กรุณาลองใหม่ภายหลัง")}</p>
+      ${S.app.changed_at ? `<p class="small muted">ปิดเมื่อ ${esc(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" }).format(new Date(S.app.changed_at)))} (เวลาไทย)</p>` : ""}
+      <button class="btn btn-primary" data-recheck-app>ตรวจสอบอีกครั้ง</button></div></section>`;
+    $("[data-recheck-app]")?.addEventListener("click", async () => {
+      S.app = await window.Store.appStatus().catch(() => S.app);
+      if (closedForMe()) return toast("ระบบยังปิดอยู่");
+      try { await reload(); } catch (e) { toast("โหลดข้อมูลไม่สำเร็จ: " + e.message, true); }
+      route();
+    });
+  }
   function route() {
+    if (closedForMe()) return renderClosed();
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1] || "dashboard";
     const v = VIEWS.find(x => x.id === id && can(x.min)) || VIEWS[0];
     if (v.id !== id) {
@@ -248,7 +268,7 @@
     const view = $("#view");
     const fn = { dashboard: renderDashboard, contracts: () => renderContracts("contracts"), confidential: () => renderContracts("confidential"),
       user: renderUserCase, master: renderMaster, admin: renderAdmin }[S.view];
-    view.innerHTML = fn();
+    view.innerHTML = (S.app?.app_open === false ? `<div class="app-closed-banner">ระบบปิดสำหรับผู้ใช้ Level 1-3 อยู่ · เปิดได้ที่ Admin Tools &gt; Web App Access</div>` : "") + fn();
     bindView(view);
   }
 
@@ -1564,6 +1584,7 @@
     const history = reqs.filter(r => r.status !== "Pending").sort((a, b) => String(b.decided_at).localeCompare(String(a.decided_at)));
     return `<section class="panel"><div class="panel-head"><div><h2>Admin Tools <span class="tag tag-dark">Admin Only</span></h2><p>เครื่องมือสำหรับผู้ดูแลระบบ</p></div>
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
+    ${renderAppSwitch()}
     ${renderImport()}
     <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Remark</th><th>Decision</th></tr></thead>
@@ -1587,6 +1608,24 @@
     } } })}
 
     ${renderLine()}`;
+  }
+
+  // ───────────── Web App Access (Level 4-5) ─────────────
+  const bkkTime = at => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
+  const stamp = (by, at) => at ? `เปลี่ยนล่าสุด ${bkkTime(at)} (เวลาไทย)${by ? ` โดย ${by}` : ""}` : "ยังไม่เคยเปลี่ยน";
+  function switchCard({ attr, on, title, sub, onLabel, offLabel, meta, disabled }) {
+    return `<div class="switch-card ${on ? "" : "off"}"><div class="switch-text"><div class="switch-title">${title}</div><div class="small muted">${sub}</div>
+      <div class="small muted" style="margin-top:4px">${esc(meta)}</div></div>
+      <span class="switch-state" style="color:${on ? "#2E9E5B" : "#C62828"}">${on ? onLabel : offLabel}</span>
+      <button class="switch ${on ? "on" : ""}" ${attr} role="switch" aria-checked="${on}" ${disabled ? "disabled" : ""} title="${on ? "กดเพื่อปิด" : "กดเพื่อเปิด"}"></button></div>`;
+  }
+  function renderAppSwitch() {
+    const a = S.app || { app_open: true }, open = a.app_open !== false;
+    return `<section class="panel"><div class="panel-head"><div><h2>Web App Access <span class="tag tag-dark">Admin Only</span></h2><p>เปิด/ปิดการเข้าใช้งานเว็บของผู้ใช้ Level 1-3 โดยไม่กระทบ LINE Notification</p></div></div>
+      ${a.missing ? `<div class="login-error show" style="margin:0 18px 12px">ยังไม่ได้รัน SQL 015_app_switch.sql จึงยังปิดระบบไม่ได้</div>` : ""}
+      ${switchCard({ attr: "data-app-switch", on: open, title: "การเข้าใช้งาน Web app", sub: open ? "ผู้ใช้ทุกคนเข้าใช้งานได้ตามสิทธิ์" : "ผู้ใช้ Level 1-3 เห็นหน้า “ระบบปิดใช้งานชั่วคราว” และอ่าน/แก้ข้อมูลไม่ได้",
+        onLabel: "เปิดใช้งาน", offLabel: "ปิดอยู่", meta: stamp(a.changed_by, a.changed_at), disabled: a.missing })}
+      ${open ? `<div style="padding:0 18px 14px"><input class="input" id="appCloseMsg" placeholder="ข้อความที่ผู้ใช้จะเห็นตอนปิด (ไม่บังคับ) เช่น ปิดปรับปรุงระบบถึง 17:00"></div>` : ""}</section>`;
   }
 
   // ───────────── LINE Notification (Edge Function line-notify, Level 4-5) ─────────────
@@ -1645,9 +1684,10 @@
       <div class="toolbar"><button class="btn" data-line-view ${pv ? "" : "disabled"}>${L.showMsg ? "ซ่อนข้อความ LINE" : "ดูข้อความ LINE"}</button>
       <button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
       <button class="btn btn-primary" data-line-send ${busy || st?.sendingEnabled === false || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
+      ${switchCard({ attr: `data-line-sending="${st?.sendingEnabled === false ? "on" : "off"}"`, on: st?.sendingEnabled !== false,
+        title: "LINE Notification Sending", sub: "ควบคุมการส่งอัตโนมัติและ Send Now โดยไม่กระทบการเข้าใช้งาน Web app",
+        onLabel: "เปิดใช้งาน", offLabel: "ปิดอยู่", meta: st ? "ตั้งค่าการส่ง LINE ของระบบ" : "กำลังโหลดสถานะ...", disabled: !st || busy })}
       <div class="table-wrap" style="padding:0 18px 12px"><table class="grid compact"><tbody>
-        <tr><th style="width:220px">LINE Notification Sending</th><td><button class="btn btn-sm ${st?.sendingEnabled === false ? "btn-danger" : "btn-green"}" data-line-sending="${st?.sendingEnabled === false ? "on" : "off"}" ${!st || busy ? "disabled" : ""}>${st?.sendingEnabled === false ? "Off · กดเพื่อเปิด" : "On · กดเพื่อปิด"}</button>
-          <span class="small muted">ควบคุมทั้ง Automatic และ Send Now</span></td></tr>
         <tr><th style="width:220px">LINE Connection</th><td>${conn}</td></tr>
         <tr><th>Group</th><td><b>${LINE_GROUP}</b></td></tr>
         <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · Automatic
@@ -1899,6 +1939,16 @@
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     bindLine(root);
+    $("[data-app-switch]", root)?.addEventListener("click", async () => {
+      const open = S.app?.app_open !== false;
+      const msg = $("#appCloseMsg", root)?.value || "";
+      if (open && !confirm("ปิดการเข้าใช้งาน Web app?\nผู้ใช้ Level 1-3 จะใช้งานไม่ได้จนกว่าจะเปิดอีกครั้ง (Admin และ Root ยังเข้าได้)")) return;
+      await guard(async () => {
+        await window.Store.setAppOpen(!open, msg);
+        S.app = await window.Store.appStatus();
+        render();
+      }, open ? "ปิดการเข้าใช้งาน Web app แล้ว" : "เปิดการเข้าใช้งาน Web app แล้ว");
+    });
     $("[data-snap-file]", root)?.addEventListener("change", e => { if (e.target.files[0]) readSnapshot(e.target.files[0]); });
     $("[data-snap-import]", root)?.addEventListener("click", e => runImport(e.currentTarget));
     $("[data-reset-demo]", root)?.addEventListener("click", async () => {
