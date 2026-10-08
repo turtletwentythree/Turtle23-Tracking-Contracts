@@ -45,6 +45,7 @@ supabase/migrations/009_log_edit.sql    Log View Detail แก้ไขได้
 supabase/migrations/010_email_attachments.sql อีเมลจาก User Case Action: Attachment Required ต่อ Action, email_log, ผู้อนุมัติ Due Date
 supabase/migrations/011_storage_attachments.sql ไฟล์แนบเก็บใน Supabase Storage (bucket ส่วนตัว attachments, 20 MB ต่อไฟล์, เฉพาะ PDF/Word/Excel/PowerPoint/JPG/PNG) ไม่ใช้ Google Drive
 supabase/migrations/012_email_outbox.sql email_outbox: กันอีเมลซ้ำด้วย requestId, สถานะ queued/sending/sent/failed
+supabase/migrations/013_own_cases.sql    User Case Action: Level 1-3 ทำได้เฉพาะเคสที่ตัวเองเป็น Contract Owner หรือ Station Owner
 supabase/functions/send-email/      Edge Function ส่งอีเมล (Resend หรือ Microsoft Graph) วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```

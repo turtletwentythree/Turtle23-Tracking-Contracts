@@ -852,10 +852,22 @@
     });
   }
 
+  // Own cases (same rule as 013_own_cases.sql): the signed-in email is the Contract Owner or the current Station Owner.
+  // Level 4-5 work on every case.
+  function myCaseNames() {
+    const email = String(S.user?.email || "").toLowerCase();
+    const names = new Set(S.db.people.filter(p => email && (p.email || "").toLowerCase() === email).map(p => p.name));
+    const ua = (S.db.user_access || []).find(u => (u.email || "").toLowerCase() === email);
+    [ua?.display_name, S.user?.display_name].filter(Boolean).forEach(n => names.add(n));
+    return names;
+  }
+  const stationOwner = c => (latestLog(c.id) || {}).to_person || c.station_to || "";
+  const isStationOwner = c => myCaseNames().has(stationOwner(c));
+  const isMyCase = c => can(4) || myCaseNames().has(c.owner) || isStationOwner(c);
   function contractPicker(attr) {
-    const open = visibleContracts().filter(isOpen);
+    const open = visibleContracts().filter(isOpen).filter(isMyCase);
     const sel = S.selectedContract;
-    return `<select class="select" data-pick="${attr}"><option value="">เลือกสัญญา / Select contract</option>
+    return `<select class="select" data-pick="${attr}"><option value="">${can(4) ? "เลือกสัญญา / Select contract" : open.length ? "เลือกเคสของคุณ / Select your case" : "ไม่มีเคสที่คุณเป็น Contract Owner หรือ Station Owner"}</option>
       ${open.map(c => `<option value="${esc(c.id)}" ${sel === c.id ? "selected" : ""}>${esc(c.id)} · ${esc(c.name)}</option>`).join("")}</select>`;
   }
   function currentCard(c) {
@@ -956,14 +968,16 @@
     const alert = forward ? "U" : aSla == null ? "N" : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
     await guard(async () => {
       const files = await uploadAttach("update", c.id);
+      // Contract first, then the new log: only the current Station Owner or Contract Owner may write (013_own_cases.sql),
+      // and the new log hands the case to the next person
+      await window.Store.update("contracts", c.id, {
+        stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: c.station_to || c.owner, station_to: to, station_in: date
+      });
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
       const log = await window.Store.insert("contract_logs", {
         contract_id: c.id, log_no: logNo, cycle, action, from_person: c.station_to || c.owner, to_person: to,
         in_date: date, sla: aSla, action_sla: aSla, days_on_hand: onHand, alert: ALERT_LABEL[alert], cc_recipients: cc,
         attachments: files, reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
-      });
-      await window.Store.update("contracts", c.id, {
-        stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: c.station_to || c.owner, station_to: to, station_in: date
       });
       S.ccDraft = []; S.attach.update = [];
       await reload(); renderNav(); render();
@@ -1000,6 +1014,8 @@
     if (!c) return toast("กรุณาเลือกสัญญา", true);
     const result = $("#clResult").value, date = $("#clDate").value || todayISO(), note = $("#clNote").value.trim();
     const owner = $("#clOwner").value || c.owner, toEmail = $("#clTo").value;
+    if (owner !== c.owner && !can(4) && !isStationOwner(c))
+      return toast("เปลี่ยน Final Contract Owner ได้เฉพาะ Station Owner ปัจจุบัน หรือ Admin", true);
     if (!toEmail) return toast("กรุณาเลือกผู้รับอีเมล (To)", true);
     const cc = takeCc(); if (!cc) return;
     if (!checkAttach("close", attachRule("close"))) return;
@@ -1009,13 +1025,14 @@
     const action = result === "Closed" ? "Completed" : "Cancelled";
     await guard(async () => {
       const files = await uploadAttach("close", c.id);
+      // Contract first, then the closing log (same order as Update Status, see 013_own_cases.sql)
+      await window.Store.update("contracts", c.id, { status: result, stage: action, owner, closed_at: date, close_reason: note || action });
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
       const log = await window.Store.insert("contract_logs", {
         contract_id: c.id, log_no: logNo, cycle: c.cycle, action,
         alert: result === "Closed" ? "B=Completed" : "B=Cancelled", days_on_hand: 0, attachments: files, cc_recipients: cc,
         from_person: c.station_to, to_person: owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
-      await window.Store.update("contracts", c.id, { status: result, stage: action, owner, closed_at: date, close_reason: note || action });
       S.selectedContract = null; S.attach.close = []; S.ccDraft = [];
       await reload(); renderNav(); render();
       toast(`ปิดเคส ${c.id} แล้ว`);
