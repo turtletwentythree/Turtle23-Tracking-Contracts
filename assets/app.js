@@ -1625,7 +1625,8 @@
         ${pv ? `<span class="small muted">Preview ${esc(pv.today || "")} (ยังไม่ได้ส่ง)</span>` : ""}</div>
       ${L.showMsg && pv ? `<div style="padding:0 18px 12px">${pv.messages && window.LineFlexView
         ? `<div class="small muted" style="margin-bottom:6px">หน้าตาข้อความที่จะเข้ากลุ่ม LINE ตอนนี้ (ตัวอย่าง ยังไม่ได้ส่ง) · เลื่อนซ้ายขวาในแต่ละข้อความเพื่อดูการ์ดถัดไป</div>${window.LineFlexView.render(pv.messages)}`
-        : `<div class="empty">ดูข้อความ LINE ได้เมื่อเชื่อม Supabase และติดตั้ง line-notify แล้ว</div>`}</div>` : ""}
+        : `<div class="empty">${window.Store.mode === "demo" ? "ดูข้อความ LINE ได้เมื่อเชื่อม Supabase และติดตั้ง line-notify แล้ว"
+          : "line-notify บน Supabase เป็นเวอร์ชันเก่า: วางไฟล์ line-notify-single-file.ts ล่าสุดทับโค้ดเดิม แล้ว Deploy อีกครั้ง"}</div>`}</div>` : ""}
       <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>Contract</th><th>Contract Owner</th><th>Target</th><th>Status</th><th>Message</th><th>Send Now?</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td><b>${esc(r.contractId)}</b><div class="small muted">${esc(r.contractName)}</div></td><td>${esc(r.owner)}</td><td>${esc(r.target)}</td><td>${statusTag(r.statusCode)}</td>
         <td>${esc(r.message)}<div class="small muted">Action: ${esc(r.action)} · Due ${esc(r.dueDate)}</div></td>
