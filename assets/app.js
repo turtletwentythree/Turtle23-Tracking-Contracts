@@ -1609,7 +1609,8 @@
       <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}: ${esc((L.result.errors || []).join(" | "))}` : ""}</div></div>` : "";
     const busy = L.loading || L.sending;
     return `<section class="panel" id="line-panel"><div class="panel-head"><div><h2>LINE Notification <span class="tag tag-dark">Admin Only</span></h2><p>แจ้งเตือน Status Update Y=Delayed / R=Overdue เข้ากลุ่ม LINE ชุดเดียวกับ Dashboard</p></div>
-      <div class="toolbar"><button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
+      <div class="toolbar"><button class="btn" data-line-view ${pv ? "" : "disabled"}>${L.showMsg ? "ซ่อนข้อความ LINE" : "ดูข้อความ LINE"}</button>
+      <button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
       <button class="btn btn-primary" data-line-send ${busy || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
       <div class="table-wrap" style="padding:0 18px 12px"><table class="grid compact"><tbody>
         <tr><th style="width:220px">LINE Connection</th><td>${conn}</td></tr>
@@ -1622,6 +1623,9 @@
       ${L.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(L.error)}</div>` : ""}${res}
       <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-amber">Y=Delayed ${pv?.counts?.Y ?? "-"}</span><span class="tag tag-red">R=Overdue ${pv?.counts?.R ?? "-"}</span><span class="tag tag-dark">Queue ${pv ? rows.length : "-"} สัญญา</span>
         ${pv ? `<span class="small muted">Preview ${esc(pv.today || "")} (ยังไม่ได้ส่ง)</span>` : ""}</div>
+      ${L.showMsg && pv ? `<div style="padding:0 18px 12px">${pv.messages && window.LineFlexView
+        ? `<div class="small muted" style="margin-bottom:6px">หน้าตาข้อความที่จะเข้ากลุ่ม LINE ตอนนี้ (ตัวอย่าง ยังไม่ได้ส่ง) · เลื่อนซ้ายขวาในแต่ละข้อความเพื่อดูการ์ดถัดไป</div>${window.LineFlexView.render(pv.messages)}`
+        : `<div class="empty">ดูข้อความ LINE ได้เมื่อเชื่อม Supabase และติดตั้ง line-notify แล้ว</div>`}</div>` : ""}
       <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>Contract</th><th>Contract Owner</th><th>Target</th><th>Status</th><th>Message</th><th>Send Now?</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td><b>${esc(r.contractId)}</b><div class="small muted">${esc(r.contractName)}</div></td><td>${esc(r.owner)}</td><td>${esc(r.target)}</td><td>${statusTag(r.statusCode)}</td>
         <td>${esc(r.message)}<div class="small muted">Action: ${esc(r.action)} · Due ${esc(r.dueDate)}</div></td>
@@ -1632,6 +1636,7 @@
     const L = S.line;
     if (!L.loaded && !L.loading && document.getElementById("line-panel")) setTimeout(lineLoad, 0);
     $("[data-line-refresh]", root)?.addEventListener("click", () => { L.result = null; lineLoad(); });
+    $("[data-line-view]", root)?.addEventListener("click", () => { L.showMsg = !L.showMsg; paintLine(); });
     $("[data-line-auto]", root)?.addEventListener("click", async e => {
       const on = e.currentTarget.dataset.lineAuto === "on";
       if (on && !armed(e.currentTarget, "กดอีกครั้ง: เปิดส่งอัตโนมัติ 09:30")) return;

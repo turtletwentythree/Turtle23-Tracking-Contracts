@@ -198,7 +198,8 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
     const today = bkk.format((deps.now || (() => new Date()))());
     const { candidates, counts } = queue(await loadAll(db), deps.createEngine, today);
     return { success: true, dryRun: true, today, counts, queue: candidates.length, rows: previewRows(candidates, await sentToday(db, today)),
-      pushes: buildPushes(candidates).length };
+      // The exact LINE messages a send would push now (already masked); drawn by assets/line-flex-view.js
+      messages: buildPushes(candidates).map(p => p.messages) };
   }
   if (mode === "send") return run(deps, db, "admin", by);
   if (mode === "setAuto") {
