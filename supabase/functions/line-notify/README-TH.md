@@ -21,6 +21,8 @@
    ```
    supabase functions deploy line-notify --no-verify-jwt
    ```
+   ไม่มี CLI: `python3 supabase/functions/line-notify/make-single-file.py line-notify-single-file.ts` แล้ววางไฟล์นั้นใน
+   Supabase > Edge Functions > Deploy a new function > Via Editor ตั้งชื่อ `line-notify` > Deploy แล้วปิด Verify JWT ในหน้า Details ของฟังก์ชัน
 4. ตั้งเวลา 09:30 (SQL Editor) แทน `<PROJECT_REF>` ด้วย Project ref ของ Supabase
    ```sql
    create extension if not exists pg_cron;
