@@ -414,3 +414,5 @@ button.log-file { background: none; border: 0; padding: 0; cursor: pointer; font
 .switch:disabled { opacity: .5; cursor: not-allowed; }
 .switch-state { font-weight: 800; min-width: 92px; text-align: right; }
 .app-closed-banner { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: #FDECEC; color: #9B1C1C; font-weight: 700; }
+.cc-chip.locked { background: #E8F0FE; border-color: #C5D6F5; padding-right: 10px; }
+.cc-warn { font-size: 12px; color: #B45309; }

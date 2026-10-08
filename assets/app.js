@@ -711,7 +711,7 @@
           <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to"><option value="">Same as Contract Owner</option>${peopleByDept(F.station_to)}</select></div>
           <div class="field"><label>Add Case Date / วันที่รับเรื่อง</label><input class="input" type="date" data-add="add_case_date" value="${esc(start)}"></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" data-add="remark">${esc(F.remark || "")}</textarea></div>
-          ${ccField()}
+          ${ccField(F.owner)}
           ${attachBox("add", attachRule("add"))}
         </div>
         <div class="summary-grid">
@@ -735,7 +735,7 @@
     const F = S.addForm;
     const missing = [["type", "Type of Contract"], ["name", "Contract Name"], ["owner", "Department / Contract Owner"]].filter(([k]) => !F[k]).map(x => x[1]);
     if (missing.length) return toast("กรุณากรอก: " + missing.join(", "), true);
-    const cc = takeCc(); if (!cc) return;
+    const cc = takeCc(F.owner, personEmail(F.station_to || F.owner)); if (!cc) return;
     if (!checkAttach("add", attachRule("add"))) return;
     const isConf = F.classification === CLASS_CONF;
     const match = activeTypes().find(t => t.classification === F.classification && t.type === F.type && (t.sub_type || "") === (F.sub_type || ""))
@@ -762,7 +762,7 @@
       await reload(); renderNav(); render();
       const c = S.db.contracts.find(x => x.id === id);
       toast(`สร้างเคส ${id} แล้ว`);
-      if (c) openEmailModal({ kind: "add_case", contract: c, logId: log?.id, action: "Add Case", to: personEmail(to), cc: cc.map(r => r.email), files,
+      if (c) openEmailModal({ kind: "add_case", contract: c, logId: log?.id, action: "Add Case", to: personEmail(to), cc: cc.map(r => r.email), lockedCc: lockedCc(cc), files,
         ...caseEmail({ c, action: "Add Case", actionTh: "สร้างเคสใหม่", from: F.owner, toName: to, reason: F.remark, files,
           extra: [["Total SLA", "SLA รวม", `${sla} Working Days / วันทำการ`], ["Add Case Date", "วันที่รับเรื่อง", fmtDate(start)]] }) });
     });
@@ -807,7 +807,7 @@
             ${peopleByDept()}</select></div>
           <div class="field"><label>Date / วันที่</label><input class="input" type="date" id="upDate" value="${todayISO()}"></div>
           <div class="field full"><label>Reason / เหตุผล</label><textarea class="input" rows="2" id="upReason" placeholder="รายละเอียดการดำเนินการ"></textarea></div>
-          ${ccField()}
+          ${ccField(c?.owner)}
           ${attachBox("update", attachRule("update", ""))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-update-submit ${c ? "" : "disabled"}>Save Update / บันทึก</button></div>
@@ -816,18 +816,39 @@
 
   // CC E-Mail / สำเนาถึง: the same field on every User Case Action form that sends an email
   // (Add Case, Update Status, Close Case, Request Due Date); the chosen people are copied on that email
-  function ccField() {
-    return `<div class="field full"><label>CC E-Mail / สำเนาถึง</label>
+  // The case's Contract Owner is always copied (People Master email), shown as a fixed chip that cannot be removed;
+  // left out only when the owner is the sender or already the To
+  function ownerCc(owner) {
+    if (!owner) return null;
+    const email = personEmail(owner);
+    return email ? { name: owner, email, auto: true } : { name: owner, missing: true };
+  }
+  function ccField(owner) {
+    const o = ownerCc(owner);
+    const me = String(S.user?.email || "").toLowerCase();
+    const fixed = !o || o.email === me ? "" : o.missing
+      ? `<span class="cc-warn">Contract Owner ${esc(o.name)} ไม่มีอีเมลใน People Master จึง CC อัตโนมัติไม่ได้</span>`
+      : `<span class="cc-chip locked" title="${esc(o.email)} · Contract Owner (CC อัตโนมัติ)">🔒 ${esc(o.name)} · Contract Owner</span>`;
+    return `<div class="field full"><label>CC E-Mail / สำเนาถึง <span class="small muted">(Contract Owner ใส่ให้อัตโนมัติ)</span></label>
             <div class="cc-row"><select class="select cc-pick" id="upCcPick"><option value="">เลือกตามแผนก / Pick by department</option>${ccByDept()}</select>
-            <div class="cc-box"><span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="หรือพิมพ์อีเมลแล้วกด Enter"></div></div>
+            <div class="cc-box">${fixed}<span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="หรือพิมพ์อีเมลแล้วกด Enter"></div></div>
             <datalist id="ccOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>`;
   }
   // Takes a typed but not yet added CC, then returns the CC list ({name, email}); false when the typed email is invalid
-  function takeCc() {
+  // owner = the case's Contract Owner (always copied), to = the email's main recipient
+  function takeCc(owner, to) {
     if (S.ccDraft === undefined) S.ccDraft = [];
     if ($("#upCc")?.value.trim() && !addCc($("#upCc").value)) return false;
-    return (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
+    const list = (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
+    const o = ownerCc(owner), me = String(S.user?.email || "").toLowerCase(), toEmail = String(to || "").toLowerCase();
+    if (o?.missing) toast(`Contract Owner ${o.name} ไม่มีอีเมลใน People Master จึงไม่ได้ CC อัตโนมัติ`, true);
+    else if (o && o.email !== me && o.email !== toEmail) {
+      const i = list.findIndex(r => r.email === o.email); if (i >= 0) list.splice(i, 1);
+      list.unshift({ name: o.name, email: o.email, auto: true });
+    }
+    return list;
   }
+  const lockedCc = cc => cc.filter(r => r.auto).map(r => r.email);
   // CC E-Mail: emails from People Master plus active users, and any other email typed in
   function ccOptions() {
     const out = new Map();
@@ -871,7 +892,7 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const action = $("#upAction").value, to = $("#upTo").value, date = $("#upDate").value || todayISO(), reason = $("#upReason").value.trim();
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
-    const cc = takeCc(); if (!cc) return;
+    const cc = takeCc(c.owner, personEmail(to)); if (!cc) return;
     if (!checkAttach("update", attachRule("update", action))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
@@ -899,7 +920,7 @@
       await reload(); renderNav(); render();
       toast(`อัปเดต ${c.id} แล้ว`);
       const fresh = S.db.contracts.find(x => x.id === c.id) || c, def = (S.db.action_sla || []).find(a => a.action === action);
-      openEmailModal({ kind: "update_status", contract: fresh, logId: log?.id, action, to: personEmail(to), cc: cc.map(r => r.email), files,
+      openEmailModal({ kind: "update_status", contract: fresh, logId: log?.id, action, to: personEmail(to), cc: cc.map(r => r.email), lockedCc: lockedCc(cc), files,
         ...caseEmail({ c: fresh, action, from: c.station_to || c.owner, toName: to, reason, files,
           extra: [["Action SLA", "SLA ของขั้นตอน", aSla == null ? "-" : `${aSla} Working Days / วันทำการ`], ["Description", "คำอธิบาย", def?.description || ""]] }) });
     });
@@ -918,7 +939,7 @@
           <div class="field"><label>Final Contract Owner / ผู้รับผิดชอบสัญญา</label><select class="select" id="clOwner">${peopleByDept(c?.owner)}</select></div>
           <div class="field"><label>To / แจ้งอีเมลถึง <span class="req">*</span></label><select class="select" id="clTo"><option value="">Select person</option>${peopleByDept(c ? personEmail(c.owner) : "", "email")}</select></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" id="clNote"></textarea></div>
-          ${ccField()}
+          ${ccField(c?.owner)}
           ${attachBox("close", attachRule("close"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-close-submit ${c ? "" : "disabled"}>Close Case / ปิดเคส</button></div>
@@ -933,7 +954,7 @@
     if (owner !== c.owner && !can(4) && !isStationOwner(c))
       return toast("เปลี่ยน Final Contract Owner ได้เฉพาะ Station Owner ปัจจุบัน หรือ Admin", true);
     if (!toEmail) return toast("กรุณาเลือกผู้รับอีเมล (To)", true);
-    const cc = takeCc(); if (!cc) return;
+    const cc = takeCc(c.owner, toEmail); if (!cc) return;
     if (!checkAttach("close", attachRule("close"))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
@@ -954,7 +975,7 @@
       toast(`ปิดเคส ${c.id} แล้ว`);
       const fresh = S.db.contracts.find(x => x.id === c.id) || c;
       const toName = S.db.people.find(p => (p.email || "").toLowerCase() === toEmail.toLowerCase())?.name || toEmail;
-      openEmailModal({ kind: "close_case", contract: fresh, logId: log?.id, action, to: toEmail, cc: cc.map(r => r.email), files,
+      openEmailModal({ kind: "close_case", contract: fresh, logId: log?.id, action, to: toEmail, cc: cc.map(r => r.email), lockedCc: lockedCc(cc), files,
         ...caseEmail({ c: fresh, action: result === "Closed" ? "Signed / Completed" : "Cancelled", actionTh: result === "Closed" ? "ลงนามเรียบร้อย / ปิดงาน" : "ยกเลิก",
           from: who, toName, reasonLabel: "Remark / หมายเหตุ", reason: note, files,
           extra: [["Close Date", "วันที่ปิด", fmtDate(date)], ["Closed By", "ผู้ปิดเคส", who], ["Final Contract Owner", "ผู้รับผิดชอบสัญญา", owner]] }) });
@@ -971,7 +992,7 @@
         <div class="form-grid">
           <div class="field"><label>Requested Due Date <span class="req">*</span></label><input class="input" type="date" id="ddDate" value="${c ? esc(c.due_date) : ""}"></div>
           <div class="field" style="grid-column:span 2"><label>Reason / เหตุผล <span class="req">*</span></label><input class="input" id="ddReason" placeholder="เหตุผลที่ขอขยายเวลา"></div>
-          ${ccField()}
+          ${ccField(c?.owner)}
           ${attachBox("due", attachRule("due"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-due-submit ${c ? "" : "disabled"}>Submit Request / ส่งคำขอ</button></div>
@@ -985,7 +1006,7 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const date = $("#ddDate").value, reason = $("#ddReason").value.trim();
     if (!c || !date || !reason) return toast("กรุณาเลือกสัญญา วันที่ และเหตุผล", true);
-    const cc = takeCc(); if (!cc) return;
+    const cc = takeCc(c.owner, ""); if (!cc) return;
     if (!checkAttach("due", attachRule("due"))) return;
     const who = S.user.display_name || S.user.username, requester = (S.user.email || "").toLowerCase();
     await guard(async () => {
@@ -1000,7 +1021,7 @@
       const admins = await window.Store.approvers().catch(e => { toast(e.message, true); return []; });
       const emails = admins.map(a => (a.email || "").toLowerCase()).filter(Boolean);
       const fresh = S.db.contracts.find(x => x.id === c.id) || c;
-      openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", cc: [...emails.slice(1), ...cc.map(r => r.email)], files,
+      openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", cc: [...emails.slice(1), ...cc.map(r => r.email)], lockedCc: lockedCc(cc), files,
         title: "Send Due Date Approval Email",
         ...caseEmail({ c: fresh, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: who, toName: admins[0]?.display_name || "Admin",
           reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason, files,
@@ -1165,7 +1186,7 @@
   // Send Status Update Email: To, CC, Subject, Message, Attachments. Saving already happened; this only sends.
   // Retry keeps the same requestId, so the email function never sends the same email twice and no Log is added.
   function openEmailModal(d) {
-    const st = { to: (d.to || "").toLowerCase(), cc: [], requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
+    const st = { to: (d.to || "").toLowerCase(), cc: [], locked: (d.lockedCc || []).map(e => e.toLowerCase()), requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
     (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && e !== st.to && !st.cc.includes(e)) st.cc.push(e); });
     const files = d.files || [];
     const ready = window.Mailer.configured();
@@ -1198,7 +1219,9 @@
         `Attachments: ${files.length ? `${files.length} file${files.length > 1 ? "s" : ""}${linksOnly ? " (link to system)" : ""}` : "-"}`].join("\n");
     };
     const chips = () => {
-      $("[data-em-chips]", root).innerHTML = st.cc.map((e, i) => `<span class="cc-chip" title="${esc(e)}">${esc(e)}<button type="button" data-em-del="${i}" aria-label="Remove">×</button></span>`).join("");
+      $("[data-em-chips]", root).innerHTML = st.cc.map((e, i) => st.locked.includes(e)
+        ? `<span class="cc-chip locked" title="Contract Owner (CC อัตโนมัติ)">🔒 ${esc(e)}</span>`
+        : `<span class="cc-chip" title="${esc(e)}">${esc(e)}<button type="button" data-em-del="${i}" aria-label="Remove">×</button></span>`).join("");
       preview();
     };
     const addCcEmail = value => {
@@ -1230,6 +1253,7 @@
       ccInput.value = "";
       const to = $("#emTo", root).value.trim().toLowerCase();
       if (!EMAIL_OK(to)) { err("Enter a valid email address.", "กรุณากรอกอีเมลผู้รับ (To) ให้ถูกต้อง"); $("#emTo", root).focus(); return; }
+      st.locked.forEach(x => { if (x !== to && !st.cc.includes(x)) st.cc.unshift(x); });
       st.cc = st.cc.filter(x => x !== to); chips();
       st.to = to; st.subject = $("#emSubject", root).value.trim(); st.body = $("#emBody", root).value;
       if (!st.subject) { err("Subject is required.", "กรุณากรอกหัวเรื่อง"); return; }
