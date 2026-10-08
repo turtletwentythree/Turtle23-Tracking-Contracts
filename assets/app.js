@@ -711,7 +711,7 @@
           <div class="field"><label>Send to (Station Owner) / ส่งให้</label><select class="select" data-add="station_to"><option value="">Same as Contract Owner</option>${peopleByDept(F.station_to)}</select></div>
           <div class="field"><label>Add Case Date / วันที่รับเรื่อง</label><input class="input" type="date" data-add="add_case_date" value="${esc(start)}"></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" data-add="remark">${esc(F.remark || "")}</textarea></div>
-          ${ccField(F.owner)}
+          ${ccField(F.owner, F.station_to || F.owner)}
           ${attachBox("add", attachRule("add"))}
         </div>
         <div class="summary-grid">
@@ -735,7 +735,7 @@
     const F = S.addForm;
     const missing = [["type", "Type of Contract"], ["name", "Contract Name"], ["owner", "Department / Contract Owner"]].filter(([k]) => !F[k]).map(x => x[1]);
     if (missing.length) return toast("กรุณากรอก: " + missing.join(", "), true);
-    const cc = takeCc(F.owner, personEmail(F.station_to || F.owner)); if (!cc) return;
+    const cc = takeCc(F.owner, F.station_to || F.owner, personEmail(F.station_to || F.owner)); if (!cc) return;
     if (!checkAttach("add", attachRule("add"))) return;
     const isConf = F.classification === CLASS_CONF;
     const match = activeTypes().find(t => t.classification === F.classification && t.type === F.type && (t.sub_type || "") === (F.sub_type || ""))
@@ -807,7 +807,7 @@
             ${peopleByDept()}</select></div>
           <div class="field"><label>Date / วันที่</label><input class="input" type="date" id="upDate" value="${todayISO()}"></div>
           <div class="field full"><label>Reason / เหตุผล</label><textarea class="input" rows="2" id="upReason" placeholder="รายละเอียดการดำเนินการ"></textarea></div>
-          ${ccField(c?.owner)}
+          ${ccField(c?.owner, c && stationOwner(c))}
           ${attachBox("update", attachRule("update", ""))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-update-submit ${c ? "" : "disabled"}>Save Update / บันทึก</button></div>
@@ -816,36 +816,44 @@
 
   // CC E-Mail / สำเนาถึง: the same field on every User Case Action form that sends an email
   // (Add Case, Update Status, Close Case, Request Due Date); the chosen people are copied on that email
-  // The case's Contract Owner is always copied (People Master email), shown as a fixed chip that cannot be removed;
-  // left out only when the owner is the sender or already the To
-  function ownerCc(owner) {
-    if (!owner) return null;
-    const email = personEmail(owner);
-    return email ? { name: owner, email, auto: true } : { name: owner, missing: true };
+  // CC added automatically (People Master email), shown as fixed chips that cannot be removed:
+  //   Contract Owner of the case, and the Station Owner (Add Case: Send to; other forms: who holds the case now).
+  // A person is left out when they are the sender, already the To, or listed twice.
+  function autoCc(people) {
+    const me = String(S.user?.email || "").toLowerCase(), seen = new Set(), out = [];
+    people.filter(x => x && x.name).forEach(({ name, role }) => {
+      const email = personEmail(name);
+      if (!email) { if (!out.some(o => o.name === name)) out.push({ name, role, missing: true }); return; }
+      const prev = out.find(o => o.email === email);
+      if (prev) { if (!prev.role.includes(role)) prev.role += " / " + role; return; }
+      if (email === me || seen.has(email)) return;
+      seen.add(email); out.push({ name, role, email, auto: true });
+    });
+    return out;
   }
-  function ccField(owner) {
-    const o = ownerCc(owner);
-    const me = String(S.user?.email || "").toLowerCase();
-    const fixed = !o || o.email === me ? "" : o.missing
-      ? `<span class="cc-warn">Contract Owner ${esc(o.name)} ไม่มีอีเมลใน People Master จึง CC อัตโนมัติไม่ได้</span>`
-      : `<span class="cc-chip locked" title="${esc(o.email)} · Contract Owner (CC อัตโนมัติ)">🔒 ${esc(o.name)} · Contract Owner</span>`;
-    return `<div class="field full"><label>CC E-Mail / สำเนาถึง <span class="small muted">(Contract Owner ใส่ให้อัตโนมัติ)</span></label>
+  const casePeople = (owner, station) => [{ name: owner, role: "Contract Owner" }, { name: station, role: "Station Owner" }];
+  function ccField(owner, station) {
+    const fixed = autoCc(casePeople(owner, station)).map(o => o.missing
+      ? `<span class="cc-warn">${esc(o.role)} ${esc(o.name)} ไม่มีอีเมลใน People Master จึง CC อัตโนมัติไม่ได้</span>`
+      : `<span class="cc-chip locked" title="${esc(o.email)} · ${esc(o.role)} (CC อัตโนมัติ)">🔒 ${esc(o.name)} · ${esc(o.role)}</span>`).join("");
+    return `<div class="field full"><label>CC E-Mail / สำเนาถึง <span class="small muted">(Contract Owner และ Station Owner ใส่ให้อัตโนมัติ ถ้าเป็นผู้รับหลัก To อยู่แล้วจะไม่ CC ซ้ำ)</span></label>
             <div class="cc-row"><select class="select cc-pick" id="upCcPick"><option value="">เลือกตามแผนก / Pick by department</option>${ccByDept()}</select>
             <div class="cc-box">${fixed}<span data-cc-chips>${ccChips()}</span><input class="cc-input" id="upCc" list="ccOptions" autocomplete="off" placeholder="หรือพิมพ์อีเมลแล้วกด Enter"></div></div>
             <datalist id="ccOptions">${ccOptions().map(o => `<option value="${esc(o.email)}">${esc(o.name)}</option>`).join("")}</datalist></div>`;
   }
-  // Takes a typed but not yet added CC, then returns the CC list ({name, email}); false when the typed email is invalid
-  // owner = the case's Contract Owner (always copied), to = the email's main recipient
-  function takeCc(owner, to) {
+  // Takes a typed but not yet added CC, then returns the CC list ({name, email, auto?}); false when the typed email is invalid
+  // owner / station = the case's Contract Owner and Station Owner (always copied), to = the email's main recipient
+  function takeCc(owner, station, to) {
     if (S.ccDraft === undefined) S.ccDraft = [];
     if ($("#upCc")?.value.trim() && !addCc($("#upCc").value)) return false;
     const list = (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
-    const o = ownerCc(owner), me = String(S.user?.email || "").toLowerCase(), toEmail = String(to || "").toLowerCase();
-    if (o?.missing) toast(`Contract Owner ${o.name} ไม่มีอีเมลใน People Master จึงไม่ได้ CC อัตโนมัติ`, true);
-    else if (o && o.email !== me && o.email !== toEmail) {
+    const toEmail = String(to || "").toLowerCase();
+    const auto = autoCc(casePeople(owner, station));
+    auto.filter(o => o.missing).forEach(o => toast(`${o.role} ${o.name} ไม่มีอีเมลใน People Master จึงไม่ได้ CC อัตโนมัติ`, true));
+    auto.filter(o => o.email && o.email !== toEmail).reverse().forEach(o => {
       const i = list.findIndex(r => r.email === o.email); if (i >= 0) list.splice(i, 1);
       list.unshift({ name: o.name, email: o.email, auto: true });
-    }
+    });
     return list;
   }
   const lockedCc = cc => cc.filter(r => r.auto).map(r => r.email);
@@ -892,7 +900,7 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const action = $("#upAction").value, to = $("#upTo").value, date = $("#upDate").value || todayISO(), reason = $("#upReason").value.trim();
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
-    const cc = takeCc(c.owner, personEmail(to)); if (!cc) return;
+    const cc = takeCc(c.owner, stationOwner(c), personEmail(to)); if (!cc) return;
     if (!checkAttach("update", attachRule("update", action))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
@@ -939,7 +947,7 @@
           <div class="field"><label>Final Contract Owner / ผู้รับผิดชอบสัญญา</label><select class="select" id="clOwner">${peopleByDept(c?.owner)}</select></div>
           <div class="field"><label>To / แจ้งอีเมลถึง <span class="req">*</span></label><select class="select" id="clTo"><option value="">Select person</option>${peopleByDept(c ? personEmail(c.owner) : "", "email")}</select></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" id="clNote"></textarea></div>
-          ${ccField(c?.owner)}
+          ${ccField(c?.owner, c && stationOwner(c))}
           ${attachBox("close", attachRule("close"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-close-submit ${c ? "" : "disabled"}>Close Case / ปิดเคส</button></div>
@@ -954,7 +962,7 @@
     if (owner !== c.owner && !can(4) && !isStationOwner(c))
       return toast("เปลี่ยน Final Contract Owner ได้เฉพาะ Station Owner ปัจจุบัน หรือ Admin", true);
     if (!toEmail) return toast("กรุณาเลือกผู้รับอีเมล (To)", true);
-    const cc = takeCc(c.owner, toEmail); if (!cc) return;
+    const cc = takeCc(c.owner, stationOwner(c), toEmail); if (!cc) return;
     if (!checkAttach("close", attachRule("close"))) return;
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
@@ -992,7 +1000,7 @@
         <div class="form-grid">
           <div class="field"><label>Requested Due Date <span class="req">*</span></label><input class="input" type="date" id="ddDate" value="${c ? esc(c.due_date) : ""}"></div>
           <div class="field" style="grid-column:span 2"><label>Reason / เหตุผล <span class="req">*</span></label><input class="input" id="ddReason" placeholder="เหตุผลที่ขอขยายเวลา"></div>
-          ${ccField(c?.owner)}
+          ${ccField(c?.owner, c && stationOwner(c))}
           ${attachBox("due", attachRule("due"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-due-submit ${c ? "" : "disabled"}>Submit Request / ส่งคำขอ</button></div>
@@ -1006,7 +1014,7 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const date = $("#ddDate").value, reason = $("#ddReason").value.trim();
     if (!c || !date || !reason) return toast("กรุณาเลือกสัญญา วันที่ และเหตุผล", true);
-    const cc = takeCc(c.owner, ""); if (!cc) return;
+    const cc = takeCc(c.owner, stationOwner(c), ""); if (!cc) return;
     if (!checkAttach("due", attachRule("due"))) return;
     const who = S.user.display_name || S.user.username, requester = (S.user.email || "").toLowerCase();
     await guard(async () => {
