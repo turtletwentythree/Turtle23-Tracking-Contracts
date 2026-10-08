@@ -59,7 +59,7 @@ jobs:
 
       # Stamp every script and stylesheet link with this commit, so browsers load the new files after each deploy
       - name: Version asset links
-        run: sed -i -E "s#(assets/[a-z-]+\.(js|css))\"#\1?v=${GITHUB_SHA::7}\"#g" index.html && grep -o 'assets/[^"]*' index.html
+        run: sed -i -E "s#((assets|supabase/functions/_shared)/[a-z-]+\.(js|css))\"#\1?v=${GITHUB_SHA::7}\"#g" index.html && grep -oE '(assets|supabase/functions/_shared)/[^"]*' index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

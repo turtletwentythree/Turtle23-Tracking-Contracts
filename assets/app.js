@@ -51,28 +51,10 @@
     const d = parseDate(s); if (!d) return "-";
     return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   }
-  // Working days: Mon–Fri, minus the Holiday Master when the database has one (table holidays, column date).
-  // The start day is not counted: start Monday → Tuesday = 1, Wednesday = 2. Counted on calendar dates (UTC), so no time-zone drift.
-  const utcDay = s => { const [y, m, d] = String(s).slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
-  function holidaySet() {
-    const rows = S.db.holidays || [];
-    if (S._holKey !== rows) { S._holKey = rows; S._hol = new Set(rows.filter(h => h.active !== false).map(h => String(h.date || h.holiday_date || "").slice(0, 10))); }
-    return S._hol;
-  }
-  const isWorkday = t => { const d = new Date(t), w = d.getUTCDay(); return w !== 0 && w !== 6 && !holidaySet().has(d.toISOString().slice(0, 10)); };
-  function workdays(from, to) {
-    if (!from || !to) return 0;
-    const a = utcDay(from), b = utcDay(to);
-    if (!(b > a)) return 0;
-    let n = 0;
-    for (let t = a + 864e5; t <= b; t += 864e5) if (isWorkday(t)) n++;
-    return n;
-  }
-  function addWorkdays(from, days) {
-    let t = utcDay(from || todayISO()), n = 0;
-    while (n < days) { t += 864e5; if (isWorkday(t)) n++; }
-    return new Date(t).toISOString().slice(0, 10);
-  }
+  // SLA engine, working days and the newest log come from supabase/functions/_shared/sla-engine.js,
+  // the same file the LINE notification (Edge Function line-notify) uses
+  const ENGINE = window.SlaEngine.create(() => S.db);
+  const { workdays, addWorkdays, latestLog, actionSla, totalSla, contractState } = ENGINE;
 
   function toast(msg, err = false) {
     $$(".toast").forEach(t => t.remove());
@@ -97,80 +79,14 @@
   }
 
   // ───────────── Derived contract metrics ─────────────
-  // ───────────── SLA engine (spec 2026-10-06) ─────────────
-  // Two separate clocks, never mixed:
-  //  - Alert         = Days on Hand (working days in the current Action) vs Action SLA (Action SLA Master)
-  //  - Status Update = Accumulated Days (working days since Add Case Date) vs Total SLA (Type of Contract Master)
-  // The real state is the Latest Action of the newest log; Contract Stage is used only when there is no log.
-  const CLOSED_ACTION = /^(signed|signed\s*\/\s*completed|completed)$/i;
-  const CANCELLED_ACTION = /^cancel/i;
-  const FORWARD_ACTION = /^forward$/i;
-  const NOT_AN_ACTION = /^due date /i; // Due Date request/approval notes do not change the station
-  const STATUS_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=Overdue", C: "B=Completed", X: "B=Cancelled", N: "Configuration Required" };
+  // ───────────── SLA engine (spec 2026-10-06): see supabase/functions/_shared/sla-engine.js ─────────────
+  const { CLOSED_ACTION, CANCELLED_ACTION, FORWARD_ACTION, NOT_AN_ACTION, STATUS_LABEL, ALERT_LABEL } = window.SlaEngine;
   const STATUS_TAG = { G: "tag-green", Y: "tag-amber", R: "tag-red", C: "tag-dark", X: "tag-dark", N: "tag-grey" };
-  const ALERT_LABEL = { G: "G=On Track", Y: "Y=Delayed", R: "R=At Risk", U: "U=Uncontrol", C: "B=Completed", X: "B=Cancelled", N: "Configuration Required" };
   const ALERT_TAG = { ...STATUS_TAG, U: "tag-grey" };
   const statusTag = code => `<span class="tag status-dot ${STATUS_TAG[code]}">${STATUS_LABEL[code]}</span>`;
   const alertTag = code => `<span class="tag status-dot ${ALERT_TAG[code]}">${ALERT_LABEL[code]}</span>`;
 
   function logsOf(id) { return S.db.contract_logs.filter(l => l.contract_id === id).sort((a, b) => a.log_no - b.log_no); }
-  // Newest log: highest Log No (as the Production system does), then Updated Date and Time, then the order in the database
-  function newer(a, b) {
-    if ((a.log_no || 0) !== (b.log_no || 0)) return (a.log_no || 0) > (b.log_no || 0);
-    const ta = Date.parse(a.updated_at) || 0, tb = Date.parse(b.updated_at) || 0;
-    if (ta !== tb) return ta > tb;
-    return (Number(a.id) || 0) > (Number(b.id) || 0);
-  }
-  function latestLog(id) {
-    let last = null;
-    S.db.contract_logs.forEach(l => { if (l.contract_id === id && !NOT_AN_ACTION.test(l.action || "") && (!last || newer(l, last))) last = l; });
-    return last;
-  }
-
-  // Missing settings are reported once in the console, never treated as 0
-  const configWarned = new Set();
-  function configMissing(what) { if (!configWarned.has(what)) { configWarned.add(what); console.warn(`[SLA] Configuration Required: ${what}`); } }
-  function actionSla(action) {
-    const a = String(action || "").trim().toLowerCase();
-    const row = (S.db.action_sla || []).find(r => String(r.action || "").trim().toLowerCase() === a);
-    const n = row && row.sla !== "" && row.sla != null ? Number(row.sla) : NaN;
-    if (!Number.isFinite(n)) { configMissing(`Action SLA for "${action}"`); return null; }
-    return n;
-  }
-  // Total SLA: Classification + Type of Contract + Sub Type in the Type of Contract Master (Classification must match too);
-  // when the master has no matching row, the Total SLA saved on the contract at Add Case
-  function totalSla(c) {
-    const cls = short(c.classification || (c.access_level === "Confidential" ? "Confidential" : "Day-to-day Work")).toLowerCase();
-    const rows = (S.db.contract_types || []).filter(t => short(t.classification).toLowerCase() === cls && short(t.type).toLowerCase() === short(c.type).toLowerCase());
-    const sub = short(c.sub_type).toLowerCase();
-    const row = rows.find(t => sub && short(t.sub_type).toLowerCase() === sub) || rows.find(t => !t.sub_type);
-    const n = row && row.sla != null && row.sla !== "" ? Number(row.sla) : c.total_sla != null && c.total_sla !== "" ? Number(c.total_sla) : NaN;
-    if (!Number.isFinite(n) || n <= 0) { configMissing(`Total SLA for ${c.id}`); return null; }
-    return n;
-  }
-
-  function contractState(c, today = todayISO()) {
-    const log = latestLog(c.id);
-    const action = (log && log.action) || c.stage || "";
-    const kind = CLOSED_ACTION.test(action) ? "completed" : CANCELLED_ACTION.test(action) ? "cancelled" : "open";
-    const closeDate = kind === "open" ? null : (log ? log.in_date || dateOf(log.updated_at) : null) || c.closed_at || today;
-    const end = closeDate || today;
-    // Status Update: Accumulated Days vs Total SLA
-    const acc = workdays(c.add_case_date, end);
-    const sla = totalSla(c);
-    const code = kind === "completed" ? "C" : kind === "cancelled" ? "X" : sla == null ? "N" : acc < sla ? "G" : acc < sla + 5 ? "Y" : "R";
-    // Alert: Days on Hand of the current Action vs Action SLA
-    const forward = kind === "open" && FORWARD_ACTION.test(action);
-    const inDate = (log && log.in_date) || c.station_in || null;
-    // The current Action is still on someone's desk while the case is open, so it counts to today even if an Out date was typed
-    const onHand = forward || !inDate ? null : workdays(inDate, end);
-    // Draft Created has no row in the Action SLA Master: it gets the contract's Total SLA (as the Production system does)
-    const aSla = kind === "open" && !forward ? (/^draft created$/i.test(action) && !(S.db.action_sla || []).some(r => /^draft created$/i.test(String(r.action || "").trim())) ? sla : actionSla(action)) : null;
-    const alert = kind === "completed" ? "C" : kind === "cancelled" ? "X" : forward ? "U" : aSla == null || onHand == null ? "N"
-      : onHand < aSla - 1 ? "G" : onHand <= aSla ? "Y" : "R";
-    return { c, log, action, reason: (log && log.reason) || "", kind, closeDate, acc, used: acc, totalSla: sla, balance: sla == null ? null : sla - acc,
-      code, onHand, actionSla: aSla, alert };
-  }
   const metrics = c => contractState(c);
   const isOpen = c => contractState(c).kind === "open";
   const dayText = v => v == null ? "-" : v;
@@ -1614,8 +1530,6 @@
     const reqs = S.db.due_date_requests;
     const pending = reqs.filter(r => r.status === "Pending");
     const history = reqs.filter(r => r.status !== "Pending").sort((a, b) => String(b.decided_at).localeCompare(String(a.decided_at)));
-    const alerts = visibleContracts().map(c => ({ c, m: metrics(c) })).filter(x => x.m.kind === "open" && (x.m.code === "R" || x.m.code === "Y"));
-    const msg = ({ c, m }) => `[${m.code}] Contract Status Update: ${m.code === "R" ? "Overdue" : "Delayed"}\nสถานะสัญญา: ${m.code === "R" ? "เกิน SLA รวม" : "ใกล้ครบ SLA"}\n\nContract ID: ${c.id}\nContract Name: ${c.name}\nContract Owner: ${c.owner}\nStation Owner: ${c.station_to}\nDue Date: ${fmtDate(c.due_date)}\n\nPlease update the action plan immediately. / กรุณาอัปเดตแผนดำเนินการทันที`;
     return `<section class="panel"><div class="panel-head"><div><h2>Admin Tools <span class="tag tag-dark">Admin Only</span></h2><p>เครื่องมือสำหรับผู้ดูแลระบบ</p></div>
       ${window.Store.mode === "demo" ? `<button class="btn" data-reset-demo>Reset demo data</button>` : ""}</div></section>
     ${renderImport()}
@@ -1640,12 +1554,101 @@
       return p?.last_sign_in_at ? fmtDate(String(p.last_sign_in_at).slice(0, 10)) : '<span class="muted">ยังไม่เคยเข้า</span>';
     } } })}
 
-    <section class="panel"><div class="panel-head"><div><h2>LINE Status Notifications <span class="tag tag-dark">Preview</span></h2><p>ข้อความแจ้งเตือน Status Update Y/R สำหรับส่งกลุ่ม LINE (คัดลอกไปส่งได้ทันที)</p></div>
-      <button class="btn btn-primary" data-copy-all ${alerts.length ? "" : "disabled"}>Copy all / คัดลอกทั้งหมด</button></div>
-      <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-amber">Trigger Y=Delayed</span><span class="tag tag-red">Trigger R=Overdue</span><span class="tag tag-dark">${alerts.length} messages</span></div>
-      <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>Contract</th><th>Contract Owner</th><th>Status Update</th><th>Message Preview</th><th></th></tr></thead>
-      <tbody>${alerts.map((x, i) => `<tr><td><b>${esc(x.c.id)}</b><div class="small muted">${x.c.access_level === "Confidential" ? "Confidential Contract" : esc(x.c.name)}</div></td><td>${esc(x.c.owner)}</td><td>${statusTag(x.m.code)}</td>
-        <td><div class="msg-preview" id="msg-${i}">${esc(msg(x))}</div></td><td><button class="btn btn-sm" data-copy="${i}">Copy</button></td></tr>`).join("") || `<tr><td colspan="5" class="empty">ไม่มีสัญญาที่ต้องแจ้งเตือน</td></tr>`}</tbody></table></div></section>`;
+    ${renderLine()}`;
+  }
+
+  // ───────────── LINE Notification (Edge Function line-notify, Level 4-5) ─────────────
+  // The queue is every open contract with Status Update Y or R today, from the same SLA engine as the Dashboard.
+  // Refresh Preview never sends. Send Now asks twice and is disabled while sending. The token never reaches the browser.
+  // Demo mode builds the same queue here and only simulates the send.
+  const LINE_GROUP = "T23_Tracking Contract";
+  const LINE_MASK = "Confidential Contract / สัญญาลับ";
+  S.line = { status: null, preview: null, loading: false, sending: false, error: "", result: null, loaded: false };
+  function lineDemo(body) {
+    const today = todayISO();
+    if (body.mode === "status") return { success: true, demo: true, groupName: LINE_GROUP, tokenSet: false, groupSet: false, groupSource: "none", autoEnabled: Boolean(S.line.status?.autoEnabled), lastRun: S.line.status?.lastRun || null };
+    if (body.mode === "setAuto") return { success: true, autoEnabled: body.enabled === true };
+    const seen = new Set();
+    const rows = S.db.contracts.filter(c => !seen.has(c.id) && seen.add(c.id)).map(c => contractState(c, today)).filter(x => x.kind === "open" && (x.code === "Y" || x.code === "R"))
+      .sort((a, b) => (a.code === b.code ? 0 : a.code === "R" ? -1 : 1) || b.acc - a.acc || a.c.id.localeCompare(b.c.id))
+      .map(x => ({ contractId: x.c.id, contractName: isConfidential(x.c) ? LINE_MASK : x.c.name, owner: String(x.c.owner || "").trim() || "Unassigned", target: LINE_GROUP,
+        statusCode: x.code, day: x.acc, totalSla: x.totalSla, dueDate: fmtDate(x.c.due_date), action: x.action || "-", confidential: isConfidential(x.c),
+        message: `[${x.code}] ${x.code === "R" ? "Overdue" : "Delayed"} · ${x.acc} working days${x.totalSla ? ` (SLA ${x.totalSla})` : ""}`, sentToday: false }));
+    if (body.mode === "preview") return { success: true, dryRun: true, demo: true, today, queue: rows.length, rows, counts: { Y: rows.filter(r => r.statusCode === "Y").length, R: rows.filter(r => r.statusCode === "R").length } };
+    return { success: true, demo: true, source: "admin", sent: rows.length, failed: 0, skipped: 0, errors: [], runAt: new Date().toISOString(), by: S.user?.email };
+  }
+  async function lineCall(body) {
+    if (window.Store.mode === "demo") { if (body.mode === "send") await new Promise(r => setTimeout(r, 600)); return lineDemo(body); }
+    return window.Store.lineNotify(body);
+  }
+  async function lineLoad() {
+    const L = S.line; if (L.loading) return;
+    L.loading = true; L.error = ""; paintLine();
+    try {
+      L.status = await lineCall({ mode: "status" });
+      L.preview = await lineCall({ mode: "preview" });
+    } catch (e) { L.error = e.message || String(e); }
+    L.loading = false; L.loaded = true; paintLine();
+  }
+  function paintLine() {
+    const el = document.getElementById("line-panel");
+    if (!el) return;
+    el.outerHTML = renderLine();
+    bindLine(document.getElementById("line-panel").parentNode);
+  }
+  function renderLine() {
+    const L = S.line, st = L.status, pv = L.preview;
+    const demo = window.Store.mode === "demo";
+    const ok = v => v ? `<span class="tag tag-green">พร้อม</span>` : `<span class="tag tag-red">ยังไม่ได้ตั้งค่า</span>`;
+    const conn = !st ? `<span class="muted">${L.loading ? "กำลังตรวจสอบ..." : "-"}</span>`
+      : demo ? `<span class="tag tag-amber">Demo: ไม่ได้เชื่อมต่อ LINE (จำลองการส่งเท่านั้น)</span>`
+      : `Token ${ok(st.tokenSet)} · Group ${ok(st.groupSet)}${st.groupSource === "webhook" ? ` <span class="small muted">(จาก Webhook ${fmtDate(String(st.groupCapturedAt || "").slice(0, 10))})</span>` : ""}`;
+    const last = st?.lastRun ? `${String(st.lastRun.runAt || "").replace("T", " ").slice(0, 16)} UTC · ${st.lastRun.source === "scheduled" ? "อัตโนมัติ" : "Admin"} · ส่ง ${st.lastRun.sent} · ข้าม ${st.lastRun.skipped} · ล้มเหลว ${st.lastRun.failed}` : "ยังไม่เคยส่ง";
+    const rows = pv?.rows || [];
+    const res = L.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${L.result.failed ? "ส่งไม่ครบ" : L.result.demo ? "จำลองการส่งเรียบร้อย (Demo ไม่ได้ส่งจริง)" : "ส่ง LINE เรียบร้อย"}</b>
+      <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}: ${esc((L.result.errors || []).join(" | "))}` : ""}</div></div>` : "";
+    const busy = L.loading || L.sending;
+    return `<section class="panel" id="line-panel"><div class="panel-head"><div><h2>LINE Notification <span class="tag tag-dark">Admin Only</span></h2><p>แจ้งเตือน Status Update Y=Delayed / R=Overdue เข้ากลุ่ม LINE ชุดเดียวกับ Dashboard</p></div>
+      <div class="toolbar"><button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
+      <button class="btn btn-primary" data-line-send ${busy || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
+      <div class="table-wrap" style="padding:0 18px 12px"><table class="grid compact"><tbody>
+        <tr><th style="width:220px">LINE Connection</th><td>${conn}</td></tr>
+        <tr><th>Group</th><td><b>${LINE_GROUP}</b></td></tr>
+        <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · Automatic
+          <button class="btn btn-sm ${st?.autoEnabled ? "btn-green" : ""}" data-line-auto="${st?.autoEnabled ? "off" : "on"}" ${!st || busy ? "disabled" : ""}>${st?.autoEnabled ? "On · กดเพื่อปิด" : "Off · กดเพื่อเปิด"}</button></td></tr>
+        <tr><th>Rules</th><td>ส่งเฉพาะ Y และ R · สัญญาที่ปิดแล้วไม่ส่ง · อัตโนมัติสูงสุด 1 ครั้งต่อสัญญาต่อวัน · Admin กด Send Now ส่งซ้ำได้ · สัญญาลับแสดงเฉพาะ Contract ID</td></tr>
+        <tr><th>Last run</th><td>${esc(last)}</td></tr>
+      </tbody></table></div>
+      ${L.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(L.error)}</div>` : ""}${res}
+      <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-amber">Y=Delayed ${pv?.counts?.Y ?? "-"}</span><span class="tag tag-red">R=Overdue ${pv?.counts?.R ?? "-"}</span><span class="tag tag-dark">Queue ${pv ? rows.length : "-"} สัญญา</span>
+        ${pv ? `<span class="small muted">Preview ${esc(pv.today || "")} (ยังไม่ได้ส่ง)</span>` : ""}</div>
+      <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>Contract</th><th>Contract Owner</th><th>Target</th><th>Status</th><th>Message</th><th>Send Now?</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td><b>${esc(r.contractId)}</b><div class="small muted">${esc(r.contractName)}</div></td><td>${esc(r.owner)}</td><td>${esc(r.target)}</td><td>${statusTag(r.statusCode)}</td>
+        <td>${esc(r.message)}<div class="small muted">Action: ${esc(r.action)} · Due ${esc(r.dueDate)}</div></td>
+        <td>${r.sentToday ? `<span class="tag">Yes · อัตโนมัติส่งแล้ววันนี้</span>` : `<span class="tag tag-green">Yes</span>`}</td></tr>`).join("")
+        || `<tr><td colspan="6" class="empty">${L.loading ? "กำลังโหลด..." : pv ? "ไม่มีสัญญาที่ต้องแจ้งเตือน" : "กด Refresh Preview"}</td></tr>`}</tbody></table></div></section>`;
+  }
+  function bindLine(root) {
+    const L = S.line;
+    if (!L.loaded && !L.loading && document.getElementById("line-panel")) setTimeout(lineLoad, 0);
+    $("[data-line-refresh]", root)?.addEventListener("click", () => { L.result = null; lineLoad(); });
+    $("[data-line-auto]", root)?.addEventListener("click", async e => {
+      const on = e.currentTarget.dataset.lineAuto === "on";
+      if (on && !armed(e.currentTarget, "กดอีกครั้ง: เปิดส่งอัตโนมัติ 09:30")) return;
+      try { const r = await lineCall({ mode: "setAuto", enabled: on }); L.status = { ...L.status, autoEnabled: r.autoEnabled }; toast(r.autoEnabled ? "เปิดส่งอัตโนมัติแล้ว" : "ปิดส่งอัตโนมัติแล้ว"); }
+      catch (err) { L.error = err.message; }
+      paintLine();
+    });
+    $("[data-line-send]", root)?.addEventListener("click", async e => {
+      if (L.sending) return;
+      if (!armed(e.currentTarget, `กดอีกครั้งเพื่อส่งจริง ${L.preview?.rows?.length || 0} สัญญา`)) return;
+      L.sending = true; L.error = ""; L.result = null; paintLine();
+      try { L.result = await lineCall({ mode: "send" }); }
+      catch (err) { L.error = err.message; }
+      L.sending = false; paintLine();
+      try { L.status = await lineCall({ mode: "status" }); L.preview = await lineCall({ mode: "preview" }); } catch (err) { /* keep the send result */ }
+      paintLine();
+    });
   }
 
   // Production Snapshot import (production_snapshot.json → database, add or update by key)
@@ -1844,8 +1847,7 @@
     }));
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
-    $$("[data-copy]", root).forEach(b => b.addEventListener("click", () => copyText($(`#msg-${b.dataset.copy}`).textContent)));
-    $("[data-copy-all]", root)?.addEventListener("click", () => copyText($$(".msg-preview", root).map(e => e.textContent).join("\n\n────────\n\n")));
+    bindLine(root);
     $("[data-snap-file]", root)?.addEventListener("change", e => { if (e.target.files[0]) readSnapshot(e.target.files[0]); });
     $("[data-snap-import]", root)?.addEventListener("click", e => runImport(e.currentTarget));
     $("[data-reset-demo]", root)?.addEventListener("click", async () => {

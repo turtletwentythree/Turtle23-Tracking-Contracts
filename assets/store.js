@@ -314,6 +314,16 @@
       if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้งระบบส่งอีเมล (Edge Function send-email) หรือเชื่อมต่อไม่ได้: ${message}`;
       throw new Error(message);
     }
+    // LINE Notification through the Edge Function "line-notify" (014_line_notify.sql + supabase/functions/line-notify)
+    async lineNotify(body) {
+      const { data, error } = await this.client.functions.invoke("line-notify", { body });
+      if (!error) return data;
+      let message = error.message;
+      try { const j = await error.context.json(); message = j.error || message; } catch (e) { /* no JSON reply */ }
+      if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้ง Edge Function line-notify หรือเชื่อมต่อไม่ได้: ${message}`;
+      if (/line_settings/.test(message)) message = `ยังไม่ได้รัน SQL 014_line_notify.sql (${message})`;
+      throw new Error(message);
+    }
     async approvers() {
       const { data, error } = await this.client.rpc("approver_emails");
       if (error) throw new Error(/approver_emails/.test(error.message) ? "ยังไม่ได้รัน SQL 010_email_attachments.sql" : error.message);
