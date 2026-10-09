@@ -1739,9 +1739,10 @@
       : demo ? `<span class="tag tag-amber">Demo: ไม่ได้เชื่อมต่อ LINE (จำลองการส่งเท่านั้น)</span>`
       : `Token ${ok(st.tokenSet)} · Group ${ok(st.groupSet)}${st.groupSource === "webhook" ? ` <span class="small muted">(จาก Webhook ${fmtDate(String(st.groupCapturedAt || "").slice(0, 10))})</span>` : ""}`;
     const last = st?.lastRun ? `${String(st.lastRun.runAt || "").replace("T", " ").slice(0, 16)} UTC · ${st.lastRun.source === "scheduled" ? "อัตโนมัติ" : "Admin"} · ส่ง ${st.lastRun.sent} · ข้าม ${st.lastRun.skipped} · ล้มเหลว ${st.lastRun.failed}` : "ยังไม่เคยส่ง";
+    const lastErr = st?.lastRun?.failed && (st.lastRun.errors || []).length ? lineErrors(st.lastRun.errors) : "";
     const rows = pv?.rows || [];
     const res = L.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${L.result.failed ? "ส่งไม่ครบ" : L.result.demo ? "จำลองการส่งเรียบร้อย (Demo ไม่ได้ส่งจริง)" : "ส่ง LINE เรียบร้อย"}</b>
-      <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}: ${esc((L.result.errors || []).join(" | "))}` : ""}</div></div>` : "";
+      <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}` : ""}</div>${L.result.failed ? lineErrors(L.result.errors) : ""}</div>` : "";
     const busy = L.loading || L.sending;
     // Same count as the Admin Dashboard (all departments, all classifications) from the data in this page
     const dashToday = todayISO(), dashSeen = new Set(), dash = { Y: 0, R: 0 };
@@ -1769,7 +1770,8 @@
         <tr><th>Schedule</th><td>ทุกวันจันทร์–ศุกร์ 09:30 (เวลาไทย) · LINE Sending ${sendOn ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`} · Automatic ${L.auto?.auto_enabled ? `<span class="tag tag-green">On</span>` : `<span class="tag tag-red">Off</span>`}</td></tr>
         <tr><th>Rules</th><td>ส่งเฉพาะ Y และ R · สัญญาที่ปิดแล้วไม่ส่ง · อัตโนมัติสูงสุด 1 ครั้งต่อสัญญาต่อวัน · Admin กด Send Now ส่งซ้ำได้ · สัญญาลับแสดงเฉพาะ Contract ID</td></tr>
         <tr><th>Dashboard check</th><td>${match || `<span class="muted">${L.loading ? "กำลังตรวจสอบ..." : "-"}</span>`}${L.at ? ` <span class="small muted">· Preview ณ ${esc(bkkTime(L.at))} (เวลาไทย)</span>` : ""}</td></tr>
-        <tr><th>Last run</th><td>${esc(last)}</td></tr>
+        ${st && !demo && st.quota !== undefined ? `<tr><th>โควตาข้อความ LINE เดือนนี้</th><td>${lineQuota(st.quota)}</td></tr>` : ""}
+        <tr><th>Last run</th><td>${esc(last)}${lastErr}</td></tr>
       </tbody></table></div>
       ${L.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(L.error)}</div>` : ""}${res}
       <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-amber">Y=Delayed ${pv?.counts?.Y ?? "-"}</span><span class="tag tag-red">R=Overdue ${pv?.counts?.R ?? "-"}</span><span class="tag tag-dark">Queue ${pv ? rows.length : "-"} สัญญา</span>
@@ -1783,6 +1785,33 @@
         <td>${esc(r.message)}<div class="small muted">Action: ${esc(r.action)} · Due ${esc(r.dueDate)}</div></td>
         <td>${r.sentToday ? `<span class="tag">Yes · อัตโนมัติส่งแล้ววันนี้</span>` : `<span class="tag tag-green">Yes</span>`}</td></tr>`).join("")
         || `<tr><td colspan="6" class="empty">${L.loading ? "กำลังโหลด..." : pv ? "ไม่มีสัญญาที่ต้องแจ้งเตือน" : "กด Refresh Preview"}</td></tr>`}</tbody></table></div></section>`;
+  }
+  // What LINE answered when a push failed, with what to do about it (the token itself is never shown)
+  function lineErrorHint(msg) {
+    const m = String(msg || ""), code = Number((m.match(/HTTP (\d{3})/) || [])[1]);
+    if (/secret is not set/i.test(m)) return "ยังไม่ได้ใส่ LINE_CHANNEL_ACCESS_TOKEN ใน Supabase > Edge Functions > Secrets";
+    if (code === 429 && /monthly limit/i.test(m)) return "โควตาข้อความของ LINE Official Account เดือนนี้เต็มแล้ว (ส่งเข้ากลุ่มนับตามจำนวนสมาชิกในกลุ่ม): ดูที่ LINE Official Account Manager > Settings > Plan / Usage แล้วอัปเกรดแพ็กเกจหรือรอรอบเดือนใหม่";
+    if (code === 429) return "LINE จำกัดจำนวนครั้งที่ส่ง (rate limit หรือโควตาเต็ม): ดู LINE Official Account Manager > Usage";
+    if (code === 401) return "Channel access token ไม่ถูกต้องหรือหมดอายุ: ออก token ใหม่ที่ LINE Developers Console > Messaging API แล้วใส่แทนใน Supabase Secrets (LINE_CHANNEL_ACCESS_TOKEN)";
+    if (code === 403) return "Channel นี้ไม่มีสิทธิ์ส่ง push: ตรวจแพ็กเกจและสิทธิ์ของ Channel ใน LINE Developers Console";
+    if (code === 400 && /to|group|recipient|Failed to send/i.test(m) && !/messages\[|contents/i.test(m)) return "LINE ไม่รับปลายทาง: ตรวจว่า Bot ยังอยู่ในกลุ่ม T23_Tracking Contract และ Group ID ถูกต้อง";
+    if (code === 400) return "LINE ไม่รับรูปแบบข้อความ: วาง line-notify-single-file.ts ล่าสุดแล้ว Deploy และส่งข้อความ error นี้ให้ทีมตรวจ";
+    if (code >= 500) return "ฝั่ง LINE ขัดข้องชั่วคราว: ลองกด Send Now ใหม่ภายหลัง";
+    return "";
+  }
+  function lineQuota(q) {
+    if (!q) return `<span class="muted">-</span>`;
+    if (q.error) return `<span class="small muted">อ่านโควตาไม่ได้: ${esc(q.error)}</span>${lineErrorHint(q.error) ? `<div class="small"><b>${esc(lineErrorHint(q.error))}</b></div>` : ""}`;
+    if (q.limit == null) return `ใช้ไป ${Number(q.used).toLocaleString()} ข้อความ <span class="tag tag-green">ไม่จำกัด</span>`;
+    const left = q.limit - q.used, full = left <= 0;
+    return `ใช้ไป ${Number(q.used).toLocaleString()} / ${Number(q.limit).toLocaleString()} ${full ? `<span class="tag tag-red">เต็มแล้ว</span>` : `<span class="tag tag-green">เหลือ ${left.toLocaleString()}</span>`}
+      <div class="small muted">การส่งเข้ากลุ่ม 1 ครั้งนับเท่าจำนวนสมาชิกในกลุ่ม · โควตาเริ่มใหม่ทุกต้นเดือน</div>`;
+  }
+  function lineErrors(errors) {
+    const list = [...new Set((errors || []).map(String))];
+    if (!list.length) return "";
+    return `<div class="line-errors">${list.map(e => { const h = lineErrorHint(e);
+      return `<div class="small" style="margin-top:6px">${h ? `<b>${esc(h)}</b><br>` : ""}<span class="muted">LINE ตอบกลับ: ${esc(e)}</span></div>`; }).join("")}</div>`;
   }
   function bindLine(root) {
     const L = S.line;

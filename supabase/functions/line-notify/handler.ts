@@ -125,7 +125,24 @@ async function push(deps: Deps, to: string, messages: unknown[]) {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ to, messages })
   });
-  if (!res.ok) throw new Error(`LINE Messaging API returned HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new Error(`LINE Messaging API returned HTTP ${res.status}: ${(await res.text()).slice(0, 600)}`);
+}
+
+// This month's message quota from LINE (read-only, sends nothing). A push to a group counts once per group member.
+async function quota(deps: Deps) {
+  const token = String(deps.env("LINE_CHANNEL_ACCESS_TOKEN") || "").trim();
+  if (!token) return null;
+  const get = async (path: string) => {
+    const res = await deps.fetch(`https://api.line.me/v2/bot/message/${path}`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  };
+  try {
+    const [q, used] = await Promise.all([get("quota"), get("quota/consumption")]);
+    return { type: q?.type ?? null, limit: q?.type === "limited" ? Number(q.value) : null, used: Number(used?.totalUsage ?? 0) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function withLock<T>(deps: Deps, db: any, fn: () => Promise<T>): Promise<T | null> {
@@ -202,7 +219,8 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
       success: true, groupName: GROUP_NAME, tokenSet: Boolean(deps.env("LINE_CHANNEL_ACCESS_TOKEN")),
       groupSet: Boolean(groupId(deps, s)), groupSource: deps.env("LINE_GROUP_ID") ? "secret" : s.group_id ? "webhook" : "none",
       groupCapturedAt: s.group_captured_at, webhookKeySet: Boolean(deps.env("LINE_WEBHOOK_KEY")),
-      autoEnabled: Boolean(s.auto_enabled), sendingEnabled: s.sending_enabled !== false, lastRunAt: s.last_run_at, lastRun: s.last_run
+      autoEnabled: Boolean(s.auto_enabled), sendingEnabled: s.sending_enabled !== false, lastRunAt: s.last_run_at, lastRun: s.last_run,
+      quota: await quota(deps)
     };
   }
   if (mode === "preview") {
