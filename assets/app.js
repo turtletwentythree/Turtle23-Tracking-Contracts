@@ -274,11 +274,12 @@
     setTimeout(() => openDrawer(c.id), 0);
   }
 
-  // Left menu: « hides it to an icon rail, » shows it again; remembered in this browser (phones keep the top menu bar)
+  // Left menu: « switches to auto-hide (an icon rail that opens while pointed at), 📌 pins it open again;
+  // remembered in this browser (phones keep the top menu bar)
   function setNavCollapsed(on) {
     document.documentElement.classList.toggle("nav-collapsed", on);
     const b = document.getElementById("navToggle");
-    if (b) { b.textContent = on ? "»" : "«"; b.title = on ? "แสดงแถบเมนู" : "ซ่อนแถบเมนู"; b.setAttribute("aria-expanded", String(!on)); }
+    if (b) { b.textContent = on ? "📌" : "«"; b.title = on ? "ปักแถบเมนูไว้ (เลิกซ่อนอัตโนมัติ)" : "ซ่อนแถบเมนูอัตโนมัติ (ชี้เมาส์เพื่อเปิด)"; b.setAttribute("aria-expanded", String(!on)); }
   }
   (() => {
     let on = false;
