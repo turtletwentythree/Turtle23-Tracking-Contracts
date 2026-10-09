@@ -169,7 +169,10 @@ async function run(deps: Deps, db: any, source: "scheduled" | "admin", by: strin
     // Scheduled: at most once per contract per day; Admin Send Now: everything again
     const list = source === "scheduled" ? candidates.filter(c => !already.has(c.contractId)) : candidates;
     let sent = 0, failed = 0; const errors: string[] = [];
+    let stop = "";
     for (const p of buildPushes(list)) {
+      // Monthly quota used up or token refused: the next pushes would fail the same way, so do not call LINE again
+      if (stop) { failed += p.items.length; continue; }
       try {
         await push(deps, to, p.messages);
         sent += p.items.length;
@@ -177,7 +180,8 @@ async function run(deps: Deps, db: any, source: "scheduled" | "admin", by: strin
         const { error } = await db.from("line_notifications").insert(rows);
         if (error) errors.push(`line_notifications: ${error.message}`);
       } catch (e) {
-        failed += p.items.length; errors.push(e instanceof Error ? e.message : String(e));
+        failed += p.items.length; const m = e instanceof Error ? e.message : String(e); errors.push(m);
+        if (/HTTP (401|403|429)|secret is not set/.test(m)) stop = m;
       }
     }
     const summary = { source, today, queue: candidates.length, y: counts.Y, r: counts.R, sent, skipped: candidates.length - list.length, failed, errors, runAt: now.toISOString(), by };

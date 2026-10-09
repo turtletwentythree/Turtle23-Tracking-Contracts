@@ -33,7 +33,7 @@ export function shown(c: Candidate) {
 
 const byDays = (a: Candidate, b: Candidate) => b.pendingDays - a.pendingDays || a.contractId.localeCompare(b.contractId);
 
-// Pushes to send in order (LINE allows at most 5 messages per push; each push here has 1 or 2): each with its contracts
+// Pushes to send in order (LINE allows at most 5 messages per push): each with its contracts
 export function buildPushes(candidates: Candidate[]) {
   const grouped = new Map<string, { statusCode: "Y" | "R"; ownerName: string; items: Candidate[] }>();
   candidates.forEach(c => {
@@ -58,18 +58,23 @@ export function buildPushes(candidates: Candidate[]) {
     if (last && last.length < 10 && JSON.stringify([...last, p].map(x => x.bubble)).length < 40000) last.push(p);
     else chunks.push([p]);
   });
-  const pushes: { messages: unknown[]; items: Candidate[] }[] = [];
-  chunks.forEach((chunk, i) => {
+  // LINE counts one push request once per group member, however many messages (up to 5) it carries:
+  // so pack the carousels and the summary into as few pushes as possible (34 contracts = 1 push)
+  const all: { message: unknown; items: Candidate[] }[] = chunks.map(chunk => {
     const items = chunk.flatMap(p => p.items);
     const codes = [...new Set(items.map(c => c.statusCode))].sort().join("/");
-    const messages: unknown[] = [{
+    return { items, message: {
       type: "flex",
       altText: `[${codes}] Contract Status Update - ${items.length} contract(s)`,
       contents: { type: "carousel", contents: chunk.map(p => p.bubble) }
-    }];
-    if (i === chunks.length - 1) messages.push(ownerSummary(candidates));
-    pushes.push({ messages, items });
+    } };
   });
+  if (all.length) all.push({ message: ownerSummary(candidates), items: [] });
+  const pushes: { messages: unknown[]; items: Candidate[] }[] = [];
+  for (let i = 0; i < all.length; i += 5) {
+    const part = all.slice(i, i + 5);
+    pushes.push({ messages: part.map(x => x.message), items: part.flatMap(x => x.items) });
+  }
   return pushes;
 }
 
