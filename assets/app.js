@@ -1744,6 +1744,7 @@
     const res = L.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${L.result.failed ? "ส่งไม่ครบ" : L.result.demo ? "จำลองการส่งเรียบร้อย (Demo ไม่ได้ส่งจริง)" : "ส่ง LINE เรียบร้อย"}</b>
       <div class="small">ส่ง ${L.result.sent} สัญญา${L.result.failed ? ` · ล้มเหลว ${L.result.failed}` : ""}</div>${L.result.failed ? lineErrors(L.result.errors) : ""}</div>` : "";
     const busy = L.loading || L.sending;
+    const noQuota = !demo && st?.quota?.limit != null && (st.quota.used >= st.quota.limit || st.quota.sendsLeft === 0);
     // Same count as the Admin Dashboard (all departments, all classifications) from the data in this page
     const dashToday = todayISO(), dashSeen = new Set(), dash = { Y: 0, R: 0 };
     S.db.contracts.filter(c => !dashSeen.has(c.id) && dashSeen.add(c.id)).map(c => contractState(c, dashToday))
@@ -1757,7 +1758,7 @@
     return `<section class="panel" id="line-panel"><div class="panel-head"><div><h2>LINE Notification <span class="tag tag-dark">Admin Only</span></h2><p>แจ้งเตือน Status Update Y=Delayed / R=Overdue เข้ากลุ่ม LINE ชุดเดียวกับ Dashboard</p></div>
       <div class="toolbar"><button class="btn" data-line-view ${pv ? "" : "disabled"}>${L.showMsg ? "ซ่อนข้อความ LINE" : "ดูข้อความ LINE"}</button>
       <button class="btn" data-line-refresh ${busy ? "disabled" : ""}>${L.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
-      <button class="btn btn-primary" data-line-send ${busy || !sendOn || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
+      <button class="btn btn-primary" data-line-send ${busy || !sendOn || noQuota || !rows.length || (!demo && !(st?.tokenSet && st?.groupSet)) ? "disabled" : ""}>${L.sending ? "กำลังส่ง..." : `Send Now (${rows.length})`}</button></div></div>
       ${switchCard({ attr: "data-line-sending", on: sendOn, title: "การส่ง LINE Notification",
         sub: sendOn ? "เปิดอยู่: ส่งได้ทั้งอัตโนมัติ 09:30 และ Send Now" : "ปิดอยู่: ไม่มีข้อความใดถูกส่งเข้ากลุ่ม LINE (ทั้งอัตโนมัติและ Send Now)",
         onLabel: "เปิดส่ง", offLabel: "ปิดส่ง", meta: L.auto && "sending_enabled" in L.auto ? stamp(L.auto.sending_changed_by, L.auto.sending_changed_at) : L.auto || st ? "" : "กำลังโหลด...", disabled: (!L.auto && !st) || busy })}
@@ -1773,6 +1774,7 @@
         ${st && !demo && st.quota !== undefined ? `<tr><th>โควตาข้อความ LINE เดือนนี้</th><td>${lineQuota(st.quota)}</td></tr>` : ""}
         <tr><th>Last run</th><td>${esc(last)}${lastErr}</td></tr>
       </tbody></table></div>
+      ${noQuota ? `<div class="login-error show" style="margin:0 18px 12px">โควตาข้อความ LINE เดือนนี้ไม่พอสำหรับการส่งเข้ากลุ่มอีก 1 ครั้ง จึงปิดปุ่ม Send Now ไว้ และรอบอัตโนมัติ 09:30 จะไม่ส่ง จนกว่าจะเริ่มเดือนใหม่หรืออัปเกรดแพ็กเกจ LINE Official Account</div>` : ""}
       ${L.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(L.error)}</div>` : ""}${res}
       <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-amber">Y=Delayed ${pv?.counts?.Y ?? "-"}</span><span class="tag tag-red">R=Overdue ${pv?.counts?.R ?? "-"}</span><span class="tag tag-dark">Queue ${pv ? rows.length : "-"} สัญญา</span>
         ${pv ? `<span class="small muted">Preview ${esc(pv.today || "")} (ยังไม่ได้ส่ง)</span>` : ""}</div>
@@ -1789,6 +1791,7 @@
   // What LINE answered when a push failed, with what to do about it (the token itself is never shown)
   function lineErrorHint(msg) {
     const m = String(msg || ""), code = Number((m.match(/HTTP (\d{3})/) || [])[1]);
+    if (/quota is not enough/i.test(m)) return "ระบบไม่ได้ส่ง เพราะโควตาข้อความ LINE เดือนนี้เหลือไม่พอส่งเข้ากลุ่ม: อัปเกรดแพ็กเกจที่ LINE Official Account Manager > Settings > Plan หรือรอโควตาเริ่มใหม่ต้นเดือน";
     if (/secret is not set/i.test(m)) return "ยังไม่ได้ใส่ LINE_CHANNEL_ACCESS_TOKEN ใน Supabase > Edge Functions > Secrets";
     if (code === 429 && /monthly limit/i.test(m)) return "โควตาข้อความของ LINE Official Account เดือนนี้เต็มแล้ว (ส่งเข้ากลุ่มนับตามจำนวนสมาชิกในกลุ่ม): ดูที่ LINE Official Account Manager > Settings > Plan / Usage แล้วอัปเกรดแพ็กเกจหรือรอรอบเดือนใหม่";
     if (code === 429) return "LINE จำกัดจำนวนครั้งที่ส่ง (rate limit หรือโควตาเต็ม): ดู LINE Official Account Manager > Usage";
@@ -1804,7 +1807,9 @@
     if (q.error) return `<span class="small muted">อ่านโควตาไม่ได้: ${esc(q.error)}</span>${lineErrorHint(q.error) ? `<div class="small"><b>${esc(lineErrorHint(q.error))}</b></div>` : ""}`;
     if (q.limit == null) return `ใช้ไป ${Number(q.used).toLocaleString()} ข้อความ <span class="tag tag-green">ไม่จำกัด</span>`;
     const left = q.limit - q.used, full = left <= 0;
-    return `ใช้ไป ${Number(q.used).toLocaleString()} / ${Number(q.limit).toLocaleString()} ${full ? `<span class="tag tag-red">เต็มแล้ว</span>` : `<span class="tag tag-green">เหลือ ${left.toLocaleString()}</span>`}
+    const enough = q.sendsLeft == null || q.sendsLeft > 0;
+    return `ใช้ไป ${Number(q.used).toLocaleString()} / ${Number(q.limit).toLocaleString()} ${full ? `<span class="tag tag-red">เต็มแล้ว</span>` : `<span class="tag ${enough ? "tag-green" : "tag-red"}">เหลือ ${left.toLocaleString()}</span>`}
+      ${q.members ? `<div class="small">สมาชิกในกลุ่ม ${q.members} คน · ส่ง 1 ครั้งใช้ ${q.members} ข้อความ · <b>${q.sendsLeft > 0 ? `เหลือพอส่งได้อีก ${q.sendsLeft} ครั้งในเดือนนี้` : "ไม่พอส่งอีกแม้แต่ครั้งเดียวในเดือนนี้"}</b> · โควตาเต็มเดือนส่งได้ประมาณ ${Math.floor(q.limit / q.members)} ครั้ง</div>` : ""}
       <div class="small muted">การส่งเข้ากลุ่ม 1 ครั้งนับเท่าจำนวนสมาชิกในกลุ่ม · โควตาเริ่มใหม่ทุกต้นเดือน</div>`;
   }
   function lineErrors(errors) {
@@ -1848,7 +1853,8 @@
     });
     $("[data-line-send]", root)?.addEventListener("click", async e => {
       if (L.sending) return;
-      if (!armed(e.currentTarget, `กดอีกครั้งเพื่อส่งจริง ${L.preview?.rows?.length || 0} สัญญา`)) return;
+      const q = L.status?.quota;
+      if (!armed(e.currentTarget, `กดอีกครั้งเพื่อส่งจริง ${L.preview?.rows?.length || 0} สัญญา${q?.members ? ` (ใช้โควตา ${q.members} ข้อความ)` : ""}`)) return;
       L.sending = true; L.error = ""; L.result = null; paintLine();
       try { L.result = await lineCall({ mode: "send" }); }
       catch (err) { L.error = err.message; }

@@ -129,7 +129,7 @@ async function push(deps: Deps, to: string, messages: unknown[]) {
 }
 
 // This month's message quota from LINE (read-only, sends nothing). A push to a group counts once per group member.
-async function quota(deps: Deps) {
+async function quota(deps: Deps, group?: string | null) {
   const token = String(deps.env("LINE_CHANNEL_ACCESS_TOKEN") || "").trim();
   if (!token) return null;
   const get = async (path: string) => {
@@ -138,8 +138,13 @@ async function quota(deps: Deps) {
     return res.json();
   };
   try {
-    const [q, used] = await Promise.all([get("quota"), get("quota/consumption")]);
-    return { type: q?.type ?? null, limit: q?.type === "limited" ? Number(q.value) : null, used: Number(used?.totalUsage ?? 0) };
+    const [q, used, members] = await Promise.all([get("quota"), get("quota/consumption"),
+      group ? get(`group/${encodeURIComponent(group)}/members/count`).catch(() => null) : null]);
+    const limit = q?.type === "limited" ? Number(q.value) : null, usedN = Number(used?.totalUsage ?? 0);
+    const m = members && Number(members.count) > 0 ? Number(members.count) : null;
+    // One push to the group costs one message per member
+    return { type: q?.type ?? null, limit, used: usedN, members: m,
+      sendsLeft: limit != null && m ? Math.max(0, Math.floor((limit - usedN) / m)) : null };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -170,7 +175,16 @@ async function run(deps: Deps, db: any, source: "scheduled" | "admin", by: strin
     const list = source === "scheduled" ? candidates.filter(c => !already.has(c.contractId)) : candidates;
     let sent = 0, failed = 0; const errors: string[] = [];
     let stop = "";
-    for (const p of buildPushes(list)) {
+    const pushes = buildPushes(list);
+    // Not enough quota left for this run: LINE would refuse it, so say so instead of calling it
+    if (pushes.length) {
+      const q: any = await quota(deps, to);
+      if (q && !q.error && q.limit != null && q.members && q.limit - q.used < q.members * pushes.length) {
+        stop = `LINE monthly quota is not enough: used ${q.used} of ${q.limit}, this send needs ${q.members * pushes.length} (${q.members} members x ${pushes.length}). / โควตาข้อความ LINE เดือนนี้ไม่พอ`;
+        errors.push(stop);
+      }
+    }
+    for (const p of pushes) {
       // Monthly quota used up or token refused: the next pushes would fail the same way, so do not call LINE again
       if (stop) { failed += p.items.length; continue; }
       try {
@@ -224,7 +238,7 @@ export async function handle(payload: any, req: { auth: string; cronKey: string;
       groupSet: Boolean(groupId(deps, s)), groupSource: deps.env("LINE_GROUP_ID") ? "secret" : s.group_id ? "webhook" : "none",
       groupCapturedAt: s.group_captured_at, webhookKeySet: Boolean(deps.env("LINE_WEBHOOK_KEY")),
       autoEnabled: Boolean(s.auto_enabled), sendingEnabled: s.sending_enabled !== false, lastRunAt: s.last_run_at, lastRun: s.last_run,
-      quota: await quota(deps)
+      quota: await quota(deps, groupId(deps, s))
     };
   }
   if (mode === "preview") {
