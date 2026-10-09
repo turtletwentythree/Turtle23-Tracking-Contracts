@@ -274,6 +274,23 @@
     setTimeout(() => openDrawer(c.id), 0);
   }
 
+  // Left menu: « hides it to an icon rail, » shows it again; remembered in this browser (phones keep the top menu bar)
+  function setNavCollapsed(on) {
+    document.documentElement.classList.toggle("nav-collapsed", on);
+    const b = document.getElementById("navToggle");
+    if (b) { b.textContent = on ? "»" : "«"; b.title = on ? "แสดงแถบเมนู" : "ซ่อนแถบเมนู"; b.setAttribute("aria-expanded", String(!on)); }
+  }
+  (() => {
+    let on = false;
+    try { on = localStorage.getItem("t23.navCollapsed") === "1"; } catch (e) { /* storage blocked */ }
+    setNavCollapsed(on);
+    document.getElementById("navToggle")?.addEventListener("click", () => {
+      const next = !document.documentElement.classList.contains("nav-collapsed");
+      setNavCollapsed(next);
+      try { localStorage.setItem("t23.navCollapsed", next ? "1" : "0"); } catch (e) { /* storage blocked */ }
+    });
+  })();
+
   function renderNav() {
     // Sidebar counts every contract in the page (open, completed and cancelled), as the Production system does
     const counts = { contracts: contractsFor("contracts").length, confidential: contractsFor("confidential").length };
