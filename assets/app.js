@@ -102,6 +102,12 @@
   }
   function activeTypes() { return S.db.contract_types.filter(t => t.active !== false); }
   function activePeople(dept) { return S.db.people.filter(p => p.active !== false && (!dept || p.department === dept)); }
+  // Contract Owner choices: people of a department in Master Data > Departments. People in a group that is not a
+  // department (e.g. an outside company's contacts kept for CC) are left out; they still appear in CC and Send to.
+  function ownerPeople() {
+    const deps = new Set((S.db.departments || []).map(d => d.name));
+    return activePeople().filter(p => p.department && (!deps.size || deps.has(p.department)));
+  }
   // People dropdown grouped by department (one <optgroup> each, names A–Z); key = "name" or "email"
   function peopleByDept(selected, key = "name", list = activePeople()) {
     const groups = {};
@@ -737,7 +743,7 @@
     // One dropdown for Department / Restaurant + Contract Owner: people grouped under their department
     const ownerKey = (d, n) => `${d}\u0001${n}`;
     const ownerGroups = {};
-    activePeople().filter(p => p.name && p.department).forEach(p => { (ownerGroups[p.department] = ownerGroups[p.department] || []).push(p.name); });
+    ownerPeople().filter(p => p.name).forEach(p => { (ownerGroups[p.department] = ownerGroups[p.department] || []).push(p.name); });
     const ownerOptions = `<option value="">Select Department / Contract Owner</option>` + Object.keys(ownerGroups).sort((a, b) => a.localeCompare(b)).map(d =>
       `<optgroup label="${esc(d)}">${ownerGroups[d].sort((a, b) => a.localeCompare(b)).map(n =>
         `<option value="${esc(ownerKey(d, n))}" ${F.department === d && F.owner === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</optgroup>`).join("");
@@ -1004,7 +1010,7 @@
           <div class="field"><label>Result / ผลลัพธ์ <span class="req">*</span></label><select class="select" id="clResult">
             <option value="Closed">Completed · ลงนามเรียบร้อย</option><option value="Cancelled">Cancelled · ยกเลิก</option></select></div>
           <div class="field"><label>Close Date / วันที่ปิด</label><input class="input" type="date" id="clDate" value="${todayISO()}"></div>
-          <div class="field"><label>Final Contract Owner / ผู้รับผิดชอบสัญญา</label><select class="select" id="clOwner">${peopleByDept(c?.owner)}</select></div>
+          <div class="field"><label>Final Contract Owner / ผู้รับผิดชอบสัญญา</label><select class="select" id="clOwner">${peopleByDept(c?.owner, "name", ownerPeople())}</select></div>
           <div class="field"><label>To / แจ้งอีเมลถึง <span class="req">*</span></label><select class="select" id="clTo"><option value="">Select person</option>${peopleByDept(c ? personEmail(c.owner) : "", "email")}</select></div>
           <div class="field full"><label>Remark / หมายเหตุ</label><textarea class="input" rows="2" id="clNote"></textarea></div>
           ${ccField(c?.owner, c && stationOwner(c))}
