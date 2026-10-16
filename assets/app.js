@@ -881,6 +881,12 @@
       <div class="small muted" style="margin-top:4px">Latest Action: <b>${esc(m.action || "-")}</b> · Station: ${esc(latestLog(c.id)?.from_person || c.station_from || "-")} → <b>${esc(stationOwner(c) || "-")}</b> · Due ${fmtDate(c.due_date)} · Days on hand ${dayText(m.onHand)} · Accumulated ${m.acc} · Cycle ${c.cycle} · Returns ${c.returns}</div></div>`;
   }
 
+  // From / ผู้ส่ง: defaults to who holds the case now (To of the latest Action log); the user may pick someone else
+  function fromField(c) {
+    const holder = c ? stationOwner(c) || c.owner : "";
+    const extra = holder && !activePeople().some(p => p.name === holder) ? `<option value="${esc(holder)}" selected>${esc(holder)}</option>` : "";
+    return `<div class="field"><label>From / ผู้ส่ง <span class="small muted">(ค่าเริ่มต้น: ผู้ถืองานตอนนี้)</span></label><select class="select" id="upFrom" data-default="${esc(holder)}">${extra}${peopleByDept(holder)}</select></div>`;
+  }
   function renderUpdateCase() {
     const c = S.db.contracts.find(x => x.id === S.selectedContract && isOpen(x));
     const acts = S.db.action_sla.filter(a => a.active !== false);
@@ -891,6 +897,7 @@
         <div class="form-grid">
           <div class="field"><label>Action <span class="req">*</span></label><select class="select" id="upAction"><option value="">Select Action</option>
             ${acts.map(a => `<option value="${esc(a.action)}">${esc(a.action)} · ${a.sla} วัน — ${esc(a.description || "")}</option>`).join("")}</select></div>
+          ${fromField(c)}
           <div class="field"><label>Send to / ส่งให้ <span class="req">*</span></label><select class="select" id="upTo"><option value="">Select person</option>
             ${peopleByDept()}</select></div>
           <div class="field"><label>Date / วันที่</label><input class="input" type="date" id="upDate" value="${todayISO()}"></div>
@@ -995,11 +1002,13 @@
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
     const cc = takeCc(c.owner, stationOwner(c), personEmail(to)); if (!cc) return;
     if (!checkAttach("update", attachRule("update", action))) return;
+    const fromSel = $("#upFrom"), picked = fromSel?.value || "", pickedDefault = !fromSel || picked === fromSel.dataset.default;
     c = await freshCase(c);
     const last = latestLog(c.id);
     // From = who holds the case now: the To of the latest Action log (contracts.station_to can lag behind it,
-    // e.g. after an import or a Log edit), so repeated Return / Resubmit / Forward keep the chain right
-    const holder = stationOwner(c) || c.owner;
+    // e.g. after an import or a Log edit), so repeated Return / Resubmit / Forward keep the chain right.
+    // A From the user picked by hand wins; the untouched default follows the data re-read just before saving.
+    const holder = (!pickedDefault && picked) || stationOwner(c) || c.owner;
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const cycle = c.cycle + (action === "Resubmit" ? 1 : 0);
     const returns = c.returns + (action === "Return" ? 1 : 0);
