@@ -46,6 +46,9 @@ export function resend(env: Env, http: typeof fetch = fetch): Provider {
 // so up to 15 MB in total works (sendMail alone stops at about 4 MB).
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SMALL_ATTACHMENT = 3 * 1024 * 1024;
+// Files up to this total go inside one sendMail call (needs only Mail.Send; Graph caps that request at about 4 MB after Base64).
+// Larger totals need a draft, which needs Mail.ReadWrite; without it the error carries needsLinks so the email goes with a link instead.
+export const INLINE_ATTACH_BYTES = Math.floor(2.8 * 1024 * 1024);
 const CHUNK = 10 * 320 * 1024; // upload chunks must be multiples of 320 KiB and under 4 MB
 export function graphSender(env: Env) {
   const direct = String(env("MS_SENDER") || "").trim();
@@ -81,11 +84,20 @@ export function graph(env: Env, http: typeof fetch = fetch): Provider {
         if (!res.ok) throw new Error(`Microsoft Graph ${what} ${res.status}: ${await failText(res)}`);
         return res;
       };
-      if (!m.attachments.length) {
-        const res = await call(`${user}/sendMail`, { method: "POST", headers: auth, body: JSON.stringify({ message, saveToSentItems: true }) }, "sendMail");
+      const total = m.attachments.reduce((n, a) => n + a.content.length, 0);
+      if (total <= INLINE_ATTACH_BYTES) {
+        const attachments = m.attachments.map(a => ({ "@odata.type": "#microsoft.graph.fileAttachment", name: a.fileName, contentType: a.mimeType, contentBytes: toBase64(a.content) }));
+        const res = await call(`${user}/sendMail`, { method: "POST", headers: auth,
+          body: JSON.stringify({ message: { ...message, ...(attachments.length ? { attachments } : {}) }, saveToSentItems: true }) }, "sendMail");
         return { id: res.headers.get("request-id") || "" };
       }
-      const draft = await (await call(`${user}/messages`, { method: "POST", headers: auth, body: JSON.stringify(message) }, "draft")).json();
+      const draftRes = await http(`${user}/messages`, { method: "POST", headers: auth, body: JSON.stringify(message) });
+      if (!draftRes.ok) {
+        const err: any = new Error(`Microsoft Graph draft ${draftRes.status}: ${await failText(draftRes)}`);
+        if (draftRes.status === 403) err.needsLinks = true; // app has Mail.Send but not Mail.ReadWrite
+        throw err;
+      }
+      const draft = await draftRes.json();
       const msg = `${user}/messages/${encodeURIComponent(draft.id)}`;
       try {
         for (const a of m.attachments) {

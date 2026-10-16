@@ -168,19 +168,30 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
     }
     // 4. Too large for the provider: no files, a link to the contract in the system instead
     const limit = Math.min(deps.provider.maxAttachBytes, (Number(deps.env("MAX_ATTACH_MB")) || Infinity) * 1024 * 1024);
-    const asLinks = files.length > 0 && total > limit;
-    let text = m.body;
-    if (asLinks) {
+    let asLinks = files.length > 0 && total > limit;
+    const withLinks = () => {
+      let text = m.body;
+      if (!asLinks) return text;
       text += "\n\nFiles are too large to attach. Open them in the system: / ไฟล์มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:";
       files.forEach((f, i) => { text += `\n${i + 1}. ${f.fileName}`; });
       if (m.systemLink) text += `\n${m.systemLink}`;
-    }
+      return text;
+    };
     const from = deps.env("EMAIL_FROM") || "";
     if (!from) throw new HttpError(500, "EMAIL_FROM secret is not set.");
-    const sent = await deps.provider.send({
+    const mail = () => { const text = withLinks(); return {
       from, to: m.to, toMore: m.toMore, cc: m.cc, replyTo: who.email || undefined, subject: m.subject, text, html: htmlBody(text),
       attachments: asLinks ? [] : files, idempotencyKey: m.requestId
-    });
+    }; };
+    let sent;
+    try { sent = await deps.provider.send(mail()); }
+    catch (e) {
+      // The provider cannot carry files this large (e.g. Microsoft 365 without Mail.ReadWrite): send with a link to the system instead
+      if (asLinks || !(e as any)?.needsLinks) throw e;
+      asLinks = true;
+      console.warn(JSON.stringify({ event: "email_attach_fallback", requestId: m.requestId, error: (e as Error).message }));
+      sent = await deps.provider.send(mail());
+    }
     const done = {
       status: "sent", delivery: !files.length ? "none" : asLinks ? "links" : "attached", provider: deps.provider.name,
       provider_message_id: sent.id || null, attachments: meta, sent_at: now().toISOString(), updated_at: now().toISOString(), error: null

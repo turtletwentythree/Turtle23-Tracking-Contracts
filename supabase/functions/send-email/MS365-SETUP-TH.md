@@ -25,6 +25,7 @@
 - กด **Grant admin consent for (ชื่อบริษัท)** → **Yes**
 - ที่ควรเห็น: แถว Mail.Send ขึ้น ✅ **Granted for ...**
 - (ถ้ามี `User.Read` แบบ Delegated ติดมาโดยอัตโนมัติ ลบทิ้งได้)
+- (ไม่บังคับ) ถ้าต้องการแนบไฟล์รวมเกิน 2.8 MB ให้เพิ่ม `Mail.ReadWrite` แบบ Application อีกตัวแล้ว Grant admin consent ถ้าไม่เพิ่ม ไฟล์ใหญ่จะส่งเป็นลิงก์เข้าระบบแทน (ไฟล์เล็กกว่านั้นแนบได้ด้วย Mail.Send อย่างเดียว)
 
 **4. สร้าง Client secret**
 - **Certificates & secrets → Client secrets → New client secret** · Description `supabase` · Expires **24 months** → **Add**
