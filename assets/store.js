@@ -378,6 +378,16 @@
       if (/line_settings/.test(message)) message = `ยังไม่ได้รัน SQL 014_line_notify.sql (${message})`;
       throw new Error(message);
     }
+    // Daily R = Overdue email through the Edge Function "overdue-mail" (019_overdue_mail.sql + supabase/functions/overdue-mail)
+    async overdueMail(body) {
+      const { data, error } = await this.client.functions.invoke("overdue-mail", { body });
+      if (!error) return data;
+      let message = error.message;
+      try { const j = await error.context.json(); message = j.error || message; } catch (e) { /* no JSON reply */ }
+      if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้ง Edge Function overdue-mail หรือเชื่อมต่อไม่ได้: ${message}`;
+      if (/overdue_mail_settings/.test(message)) message = `ยังไม่ได้รัน SQL 019_overdue_mail.sql (${message})`;
+      throw new Error(message);
+    }
     // On/Off switches (015_app_switch.sql). Before 015 is run the web app counts as open.
     async appStatus() {
       const { data, error } = await this.client.rpc("app_status");

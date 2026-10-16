@@ -1654,7 +1654,8 @@
       return p?.last_sign_in_at ? fmtDate(String(p.last_sign_in_at).slice(0, 10)) : '<span class="muted">ยังไม่เคยเข้า</span>';
     } } })}
 
-    ${renderLine()}`;
+    ${renderLine()}
+    ${renderOverdue()}`;
   }
 
   // ───────────── On/Off switches ─────────────
@@ -1888,6 +1889,109 @@
     });
   }
 
+  // ───────────── Overdue Email (Edge Function overdue-mail, Level 4-5) ─────────────
+  // Mon-Fri 09:00: one email per Station Owner listing their R = Overdue contracts (Dashboard widget 5), CC the Contract Owner.
+  // Preview never sends. Send Test goes to the signed-in Admin only. Send Now asks twice. Demo mode only previews.
+  S.od = { status: null, preview: null, loading: false, busy: "", error: "", result: null, loaded: false, open: null };
+  function odDemo(body) {
+    const today = todayISO(), seen = new Set(), mails = new Map(), missing = [];
+    const emailOf = name => (S.db.people.find(p => p.name === name && p.active !== false)?.email || "").toLowerCase();
+    S.db.contracts.filter(c => !seen.has(c.id) && seen.add(c.id)).map(c => contractState(c, today)).filter(x => x.kind === "open" && x.code === "R")
+      .sort((a, b) => b.acc - a.acc || a.c.id.localeCompare(b.c.id)).forEach(x => {
+        const conf = isConfidential(x.c), owner = x.c.owner || "-", station = (x.log && x.log.to_person) || x.c.station_to || x.c.owner || "-";
+        const it = { contractId: x.c.id, name: conf ? LINE_MASK : x.c.name, vendor: conf ? "-" : x.c.vendor || "-", confidential: conf, days: x.acc, totalSla: x.totalSla,
+          dueDate: fmtDate(x.c.due_date), action: x.action || "-", reason: conf ? "-" : x.reason || "-", department: x.c.department || "-", owner, station };
+        const to = emailOf(station);
+        if (!to) return missing.push({ contractId: x.c.id, person: station });
+        const m = mails.get(to) || { to, toName: station, cc: [], ccNames: [], items: [] };
+        m.items.push(it);
+        const oe = emailOf(owner); if (oe && oe !== to && !m.cc.includes(oe)) { m.cc.push(oe); m.ccNames.push(owner); }
+        mails.set(to, m);
+      });
+    const emails = [...mails.values()].sort((a, b) => b.items.length - a.items.length || a.toName.localeCompare(b.toName)).map(m => ({ ...m,
+      subject: `[R = Overdue] ${m.items.length} contract(s) waiting for your update / สัญญาเกินกำหนด ${m.items.length} รายการ รอการอัปเดต`, sentToday: false,
+      text: `Dear ${m.toName},\n\n` + m.items.map((it, i) => `${i + 1}. ${it.contractId} · ${it.name} · ${it.days} working days · Due ${it.dueDate}`).join("\n") + `\n\nUpdate Status: ${location.origin}${location.pathname}#/user` }));
+    if (body.mode === "status") return { success: true, demo: true, autoEnabled: Boolean(S.od.demoAuto), autoChangedBy: S.od.demoAutoBy, autoChangedAt: S.od.demoAutoAt, ccContractOwner: true, emailReady: false, lastRun: S.od.status?.lastRun || null };
+    if (body.mode === "setAuto") { Object.assign(S.od, { demoAuto: body.enabled === true, demoAutoBy: S.user?.email, demoAutoAt: new Date().toISOString() }); return { success: true, autoEnabled: body.enabled === true }; }
+    return { success: true, dryRun: true, demo: true, today, overdue: emails.reduce((n, m) => n + m.items.length, 0) + missing.length, missing, emails };
+  }
+  async function odCall(body) {
+    if (window.Store.mode === "demo") {
+      if (body.mode === "send" || body.mode === "sendTest") throw new Error("Demo mode ไม่ส่งอีเมลจริง");
+      return odDemo(body);
+    }
+    return window.Store.overdueMail(body);
+  }
+  async function odLoad() {
+    const O = S.od; if (O.loading) return;
+    O.loading = true; O.error = ""; O.dataAt = S.loadedAt; paintOverdue();
+    try { O.status = await odCall({ mode: "status" }); O.preview = await odCall({ mode: "preview" }); }
+    catch (e) { O.error = e.message || String(e); }
+    O.loading = false; O.loaded = true; O.at = new Date(); paintOverdue();
+  }
+  function paintOverdue() {
+    const el = document.getElementById("od-panel");
+    if (!el) return;
+    el.outerHTML = renderOverdue();
+    bindOverdue(document.getElementById("od-panel").parentNode);
+  }
+  function renderOverdue() {
+    const O = S.od, st = O.status, pv = O.preview, demo = window.Store.mode === "demo";
+    const mails = pv?.emails || [], busy = O.loading || O.busy;
+    const lr = st?.lastRun;
+    const last = lr ? `${esc(bkkTime(lr.runAt))} (เวลาไทย) · ${lr.source === "scheduled" ? "อัตโนมัติ" : "Admin"} · ส่ง ${lr.sent} ฉบับ · ข้าม ${lr.skipped} · ล้มเหลว ${lr.failed}${lr.noEmail ? ` · ไม่มีอีเมล ${lr.noEmail} สัญญา` : ""}`
+      + (lr.errors?.length ? `<div class="small" style="margin-top:4px;color:#C62828">${lr.errors.slice(0, 3).map(esc).join("<br>")}</div>` : "") : "ยังไม่เคยส่ง";
+    const res = O.result ? `<div class="current-card" style="margin:0 18px 12px"><b>${esc(O.result)}</b></div>` : "";
+    return `<section class="panel" id="od-panel"><div class="panel-head"><div><h2>Overdue Email <span class="tag tag-dark">Admin Only</span></h2>
+      <p>อีเมลเตือนสัญญา R = Overdue (รายการเดียวกับ “5. Longest pending on hand”) ถึง Station Owner ทุกวันจันทร์–ศุกร์ 09:00 · CC Contract Owner · 1 ฉบับต่อคนต่อวัน</p></div>
+      <div class="toolbar"><button class="btn" data-od-refresh ${busy ? "disabled" : ""}>${O.loading ? "กำลังโหลด..." : "Refresh Preview"}</button>
+        <button class="btn" data-od-test ${busy || demo || !mails.length ? "disabled" : ""} title="ส่งตัวอย่าง 1 ฉบับถึงอีเมลของคุณเท่านั้น">${O.busy === "test" ? "กำลังส่ง..." : "ส่งทดสอบถึงตัวเอง"}</button>
+        <button class="btn btn-primary" data-od-send ${busy || demo || !mails.length ? "disabled" : ""}>${O.busy === "send" ? "กำลังส่ง..." : `Send Now (${mails.length} ฉบับ)`}</button></div></div>
+      ${switchCard({ attr: "data-od-auto", on: Boolean(st?.autoEnabled), title: "ส่งอีเมลเตือน Overdue อัตโนมัติ 09:00",
+        sub: st?.autoEnabled ? "ระบบจะส่งทุกวันจันทร์–ศุกร์ 09:00 (เว้นวันหยุดใน Holiday Master)" : "ยังไม่ส่งอัตโนมัติ (ดูตัวอย่างและส่งเองได้)",
+        onLabel: "เปิดส่ง", offLabel: "ปิดส่ง", meta: st ? stamp(st.autoChangedBy, st.autoChangedAt) : "กำลังโหลด...", disabled: !st || busy })}
+      <div class="table-wrap" style="padding:0 18px 12px"><table class="grid compact"><tbody>
+        <tr><th style="width:220px">ระบบอีเมล</th><td>${demo ? `<span class="tag tag-amber">Demo: ไม่ส่งอีเมลจริง</span>` : st ? (st.emailReady ? `<span class="tag tag-green">พร้อม</span> <span class="small muted">${esc(st.provider === "graph" ? "Microsoft 365" : st.provider)} (ตัวเดียวกับ Send Email)</span>` : `<span class="tag tag-red">ยังไม่ได้ตั้งค่า EMAIL_FROM</span>`) : "-"}</td></tr>
+        <tr><th>ผู้รับ</th><td>To: Station Owner (ผู้ถือเคสตอนนี้) · CC: Contract Owner ถ้าเป็นคนละคน · อีเมลจาก Master Data &gt; People · สัญญาลับแสดงเฉพาะ Contract ID</td></tr>
+        <tr><th>Last run</th><td>${last}</td></tr>
+      </tbody></table></div>
+      ${O.error ? `<div class="login-error show" style="margin:0 18px 12px">${esc(O.error)}</div>` : ""}${res}
+      <div class="toolbar" style="padding:0 18px 12px"><span class="tag tag-red">R = Overdue ${pv ? pv.overdue : "-"} สัญญา</span><span class="tag tag-dark">${pv ? mails.length : "-"} ฉบับ</span>
+        ${pv?.missing?.length ? `<span class="tag tag-amber">ไม่มีอีเมลใน People ${pv.missing.length} สัญญา: ${esc([...new Set(pv.missing.map(m => m.person))].join(", "))}</span>` : ""}
+        ${pv ? `<span class="small muted">ตัวอย่าง ${esc(pv.today || "")} (ยังไม่ได้ส่ง)</span>` : ""}</div>
+      <div class="table-wrap" style="max-height:600px"><table class="grid compact"><thead><tr><th>To (Station Owner)</th><th>CC</th><th class="num">สัญญา</th><th>Subject</th><th></th></tr></thead>
+      <tbody>${mails.map((m, i) => `<tr><td><b>${esc(m.toName)}</b><div class="small muted">${esc(m.to)}</div></td><td class="small">${esc(m.ccNames.join(", ") || "-")}</td>
+        <td class="num"><b>${m.items.length}</b></td><td class="small">${esc(m.subject)}${m.sentToday ? ` <span class="tag">ส่งแล้ววันนี้</span>` : ""}</td>
+        <td><button class="btn btn-sm" data-od-view="${i}">${O.open === i ? "ซ่อน" : "ดูอีเมล"}</button></td></tr>
+        ${O.open === i ? `<tr><td colspan="5">${m.html ? `<div class="od-mail">${m.html}</div>` : `<pre class="small" style="white-space:pre-wrap">${esc(m.text)}</pre>`}</td></tr>` : ""}`).join("")
+        || `<tr><td colspan="5" class="empty">${O.loading ? "กำลังโหลด..." : pv ? "ไม่มีสัญญา R = Overdue" : "กด Refresh Preview"}</td></tr>`}</tbody></table></div></section>`;
+  }
+  function bindOverdue(root) {
+    const O = S.od;
+    if ((!O.loaded || O.dataAt !== S.loadedAt) && !O.loading && document.getElementById("od-panel")) setTimeout(odLoad, 0);
+    $("[data-od-refresh]", root)?.addEventListener("click", async () => { O.result = null; try { await reload(); render(); } catch (e) { odLoad(); } });
+    $$("[data-od-view]", root).forEach(b => b.addEventListener("click", () => { const i = Number(b.dataset.odView); O.open = O.open === i ? null : i; paintOverdue(); }));
+    $("[data-od-auto]", root)?.addEventListener("click", async () => {
+      const on = !O.status?.autoEnabled;
+      if (on && !confirm(`เปิดส่งอีเมลเตือน Overdue อัตโนมัติ?\nระบบจะส่งอีเมลถึง Station Owner ${O.preview?.emails?.length ?? ""} คน ทุกวันจันทร์–ศุกร์ 09:00`)) return;
+      try { await odCall({ mode: "setAuto", enabled: on }); O.status = await odCall({ mode: "status" }); toast(on ? "เปิดส่งอีเมลเตือนอัตโนมัติแล้ว" : "ปิดส่งอีเมลเตือนอัตโนมัติแล้ว"); }
+      catch (err) { O.error = err.message; }
+      paintOverdue();
+    });
+    const act = async (mode, btn, label, done) => {
+      if (O.busy || !armed(btn, label)) return;
+      O.busy = mode === "sendTest" ? "test" : "send"; O.error = ""; O.result = null; paintOverdue();
+      try { O.result = done(await odCall({ mode })); } catch (err) { O.error = err.message; }
+      O.busy = ""; paintOverdue();
+      try { O.status = await odCall({ mode: "status" }); O.preview = await odCall({ mode: "preview" }); } catch (err) { /* keep the result */ }
+      paintOverdue();
+    };
+    $("[data-od-test]", root)?.addEventListener("click", e => act("sendTest", e.currentTarget, `กดอีกครั้ง: ส่งตัวอย่างถึง ${S.user?.email || "คุณ"}`,
+      r => `ส่งตัวอย่างถึง ${r.sentTo} แล้ว (เนื้อหาของ ${r.sample} ${r.contracts} สัญญา)`));
+    $("[data-od-send]", root)?.addEventListener("click", e => act("send", e.currentTarget, `กดอีกครั้งเพื่อส่งจริง ${O.preview?.emails?.length || 0} ฉบับ`,
+      r => `ส่ง ${r.sent} ฉบับ${r.failed ? ` · ล้มเหลว ${r.failed}: ${(r.errors || []).join(" | ")}` : ""}`));
+  }
+
   // Production Snapshot import (production_snapshot.json → database, add or update by key)
   const IMPORT_LABELS = [["contracts", "Contracts"], ["contract_logs", "Logs"], ["due_date_requests", "Due Date Requests"], ["departments", "Departments"],
     ["people", "People"], ["contract_types", "Contract Types"], ["contract_templates", "Contract Name Templates"], ["action_sla", "Action SLA"]];
@@ -2085,6 +2189,7 @@
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     bindLine(root);
+    bindOverdue(root);
     if (document.getElementById("online-panel")) { $("[data-online-refresh]", root)?.addEventListener("click", onlineLoad); if (!S.online.rows && !S.online.loading) setTimeout(onlineLoad, 0); }
     $("[data-app-switch]", root)?.addEventListener("click", async () => {
       const open = S.app?.app_open !== false;
