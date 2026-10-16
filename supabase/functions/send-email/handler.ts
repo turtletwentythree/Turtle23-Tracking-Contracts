@@ -11,7 +11,8 @@
 export type Env = (name: string) => string | undefined;
 export interface Attachment { fileName: string; mimeType: string; content: Uint8Array }
 export interface Mail {
-  from: string; to: string; cc: string[]; replyTo?: string; subject: string; text: string; html: string;
+  // toMore: extra main recipients after `to` (e.g. the two Due Date approvers)
+  from: string; to: string; toMore?: string[]; cc: string[]; replyTo?: string; subject: string; text: string; html: string;
   attachments: Attachment[]; idempotencyKey: string;
 }
 export interface Provider { name: string; maxAttachBytes: number; send(mail: Mail): Promise<{ id: string }> }
@@ -57,12 +58,20 @@ export function validate(p: any, env: Env) {
   if (!ID_RE.test(requestId)) throw new HttpError(400, "Missing requestId.");
   const to = String(p.to || "").trim().toLowerCase();
   if (!EMAIL_RE.test(to)) throw new HttpError(400, "Enter a valid email address. / กรุณากรอกอีเมลให้ถูกต้อง (To)");
+  const toMore: string[] = [];
+  for (const item of Array.isArray(p.toMore) ? p.toMore : []) {
+    const e = String(item || "").trim().toLowerCase();
+    if (!e) continue;
+    if (!EMAIL_RE.test(e)) throw new HttpError(400, `Enter a valid email address. / กรุณากรอกอีเมลให้ถูกต้อง (To: ${e})`);
+    if (e !== to && !toMore.includes(e)) toMore.push(e);
+  }
+  if (toMore.length > 9) throw new HttpError(400, "Too many To recipients.");
   const cc: string[] = [];
   for (const item of Array.isArray(p.cc) ? p.cc : []) {
     const e = String(item || "").trim().toLowerCase();
     if (!e) continue;
     if (!EMAIL_RE.test(e)) throw new HttpError(400, `Enter a valid email address. / กรุณากรอกอีเมลให้ถูกต้อง (CC: ${e})`);
-    if (e !== to && !cc.includes(e)) cc.push(e);
+    if (e !== to && !toMore.includes(e) && !cc.includes(e)) cc.push(e);
   }
   if (cc.length > 50) throw new HttpError(400, "Too many CC recipients.");
   const subject = String(p.subject || "").replace(/[\r\n]+/g, " ").trim().slice(0, 250);
@@ -83,11 +92,14 @@ export function validate(p: any, env: Env) {
   let systemLink = String(p.systemLink || "").trim();
   if (!/^https:\/\/[^\s<>"']{1,500}$/.test(systemLink) || (site && !systemLink.startsWith(site + "/") && systemLink !== site)) systemLink = site;
   return {
-    requestId, to, cc, subject, body, attachments, systemLink,
+    requestId, to, toMore, cc, subject, body, attachments, systemLink,
     kind: String(p.kind || "").slice(0, 40) || null, contractId: String(p.contractId || "").slice(0, 120) || null,
     action: String(p.action || "").slice(0, 120) || null
   };
 }
+
+// email_outbox.to_email keeps every main recipient, comma separated
+const allTo = (m: { to: string; toMore?: string[] }) => [m.to, ...(m.toMore || [])].join(", ");
 
 async function caller(deps: Deps, authHeader: string) {
   if (!/^Bearer\s+\S+/.test(authHeader || "")) throw new HttpError(401, "Not signed in.");
@@ -118,7 +130,7 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
   if (found?.status === "sent") return result(found, { duplicate: true });
   if (!found) {
     const { error } = await db.from("email_outbox").insert({
-      request_id: m.requestId, kind: m.kind, contract_id: m.contractId, action: m.action, to_email: m.to, cc: m.cc,
+      request_id: m.requestId, kind: m.kind, contract_id: m.contractId, action: m.action, to_email: allTo(m), cc: m.cc,
       subject: m.subject, body: m.body, attachments: m.attachments, status: "queued", sent_by: who.id, sent_by_email: who.email
     });
     if (error && !/duplicate|unique/i.test(error.message)) throw new HttpError(500, `email_outbox: ${error.message}`);
@@ -126,7 +138,7 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
   // 2. Claim the row: only one call may be sending it at a time (a stuck "sending" is released after 2 minutes)
   const stale = new Date(now().getTime() - STALE_SENDING_MS).toISOString();
   const { data: claimed, error: ce } = await db.from("email_outbox")
-    .update({ status: "sending", updated_at: now().toISOString(), to_email: m.to, cc: m.cc, subject: m.subject, body: m.body, attachments: m.attachments, error: null })
+    .update({ status: "sending", updated_at: now().toISOString(), to_email: allTo(m), cc: m.cc, subject: m.subject, body: m.body, attachments: m.attachments, error: null })
     .eq("request_id", m.requestId)
     .or(`status.eq.queued,status.eq.failed,and(status.eq.sending,updated_at.lt.${stale})`)
     .select("*");
@@ -166,7 +178,7 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
     const from = deps.env("EMAIL_FROM") || "";
     if (!from) throw new HttpError(500, "EMAIL_FROM secret is not set.");
     const sent = await deps.provider.send({
-      from, to: m.to, cc: m.cc, replyTo: who.email || undefined, subject: m.subject, text, html: htmlBody(text),
+      from, to: m.to, toMore: m.toMore, cc: m.cc, replyTo: who.email || undefined, subject: m.subject, text, html: htmlBody(text),
       attachments: asLinks ? [] : files, idempotencyKey: m.requestId
     });
     const done = {
@@ -175,7 +187,7 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
     };
     await db.from("email_outbox").update(done).eq("request_id", m.requestId);
     console.log(JSON.stringify({ event: "email_sent", requestId: m.requestId, contractId: m.contractId, by: who.email, to: m.to, cc: m.cc.length, files: files.length, delivery: done.delivery }));
-    return result({ ...row, ...done, to_email: m.to, cc: m.cc });
+    return result({ ...row, ...done, to_email: allTo(m), cc: m.cc });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await db.from("email_outbox").update({ status: "failed", error: message.slice(0, 1000), updated_at: now().toISOString() }).eq("request_id", m.requestId);

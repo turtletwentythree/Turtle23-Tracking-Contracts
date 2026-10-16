@@ -127,7 +127,9 @@ export function plan(data: any, createEngine: Deps["createEngine"], today: strin
 }
 
 export function compose(m: Mail, site: string, today: string) {
-  const link = site.replace(/\/*$/, "/") + "#/user";
+  const base = site.replace(/\/*$/, "/"), link = base + "#/user";
+  // each Contract ID opens that contract in the system (confidential ones on the Confidential page, sign-in decides access)
+  const open = (it: Item) => `${base}#/${it.confidential ? "confidential" : "contracts"}/${encodeURIComponent(it.contractId)}`;
   const n = m.items.length;
   const subject = `[R = Overdue] ${n} contract${n > 1 ? "s" : ""} waiting for your update / สัญญาเกินกำหนด ${n} รายการ รอการอัปเดต (${fmtDate(today)})`;
   const lines = [
@@ -138,10 +140,11 @@ export function compose(m: Mail, site: string, today: string) {
   m.items.forEach((it, i) => {
     lines.push(`${i + 1}. ${it.contractId} · ${it.name} · ${it.days} working days${it.totalSla ? ` (SLA ${it.totalSla})` : ""} · Due ${it.dueDate}`);
     lines.push(`   Latest Action: ${it.action} · Contract Owner: ${it.owner}${it.vendor !== "-" ? ` · Vendor: ${it.vendor}` : ""}`);
+    lines.push(`   Open: ${open(it)}`);
   });
   lines.push("", `Update Status / อัปเดตสถานะ: ${link}`, "", "This email is sent automatically Monday to Friday while the contract is Overdue. / อีเมลนี้ส่งอัตโนมัติทุกวันจันทร์–ศุกร์ จนกว่าสัญญาจะไม่อยู่ในสถานะ Overdue");
   const rows = m.items.map(it => `<tr>
-    <td style="padding:8px;border-bottom:1px solid #eceeef;vertical-align:top"><b style="color:#1667a8">${esc(it.contractId)}</b><br>
+    <td style="padding:8px;border-bottom:1px solid #eceeef;vertical-align:top"><a href="${esc(open(it))}" style="color:#1667a8;font-weight:bold">${esc(it.contractId)}</a><br>
       <span style="color:#202124">${esc(it.name)}</span>${it.vendor !== "-" ? `<br><span style="color:#6f7478;font-size:12px">Vendor: ${esc(it.vendor)}</span>` : ""}</td>
     <td style="padding:8px;border-bottom:1px solid #eceeef;vertical-align:top;font-size:13px">${esc(it.action)}${it.reason !== "-" ? `<br><span style="color:#6f7478;font-size:12px">${esc(it.reason)}</span>` : ""}</td>
     <td style="padding:8px;border-bottom:1px solid #eceeef;vertical-align:top;font-size:13px">${esc(it.owner)}<br><span style="color:#6f7478;font-size:12px">${esc(it.department)}</span></td>

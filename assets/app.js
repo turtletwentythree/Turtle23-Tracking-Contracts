@@ -898,8 +898,8 @@
     return out;
   }
   const casePeople = (owner, station) => [{ name: owner, role: "Contract Owner" }, { name: station, role: "Station Owner" }];
-  function ccField(owner, station) {
-    const fixed = autoCc(casePeople(owner, station)).map(o => o.missing
+  function ccField(owner, station, extra = []) {
+    const fixed = autoCc([...casePeople(owner, station), ...extra]).map(o => o.missing
       ? `<span class="cc-warn">${esc(o.role)} ${esc(o.name)} ไม่มีอีเมลใน People Master จึง CC อัตโนมัติไม่ได้</span>`
       : `<span class="cc-chip locked" title="${esc(o.email)} · ${esc(o.role)} (CC อัตโนมัติ)">🔒 ${esc(o.name)} · ${esc(o.role)}</span>`).join("");
     return `<div class="field full"><label>CC E-Mail / สำเนาถึง <span class="small muted">(Contract Owner และ Station Owner ใส่ให้อัตโนมัติ ถ้าเป็นผู้รับหลัก To อยู่แล้วจะไม่ CC ซ้ำ)</span></label>
@@ -909,18 +909,18 @@
   }
   // Takes a typed but not yet added CC, then returns the CC list ({name, email, auto?}); false when the typed email is invalid
   // owner / station = the case's Contract Owner and Station Owner (always copied), to = the email's main recipient
-  function takeCc(owner, station, to) {
+  function takeCc(owner, station, to, extra = []) {
     if (S.ccDraft === undefined) S.ccDraft = [];
     if ($("#upCc")?.value.trim() && !addCc($("#upCc").value)) return false;
     const list = (S.ccDraft || []).map(r => ({ name: r.name, email: r.email }));
-    const toEmail = String(to || "").toLowerCase();
-    const auto = autoCc(casePeople(owner, station));
+    const toSet = new Set([].concat(to || []).map(x => String(x).toLowerCase()));
+    const auto = autoCc([...casePeople(owner, station), ...extra]);
     auto.filter(o => o.missing).forEach(o => toast(`${o.role} ${o.name} ไม่มีอีเมลใน People Master จึงไม่ได้ CC อัตโนมัติ`, true));
-    auto.filter(o => o.email && o.email !== toEmail).reverse().forEach(o => {
+    auto.filter(o => o.email && !toSet.has(o.email)).reverse().forEach(o => {
       const i = list.findIndex(r => r.email === o.email); if (i >= 0) list.splice(i, 1);
       list.unshift({ name: o.name, email: o.email, auto: true });
     });
-    return list;
+    return list.filter(r => !toSet.has(r.email));
   }
   const lockedCc = cc => cc.filter(r => r.auto).map(r => r.email);
   // CC E-Mail: emails from People Master plus active users, and any other email typed in
@@ -1056,6 +1056,20 @@
     });
   }
 
+  // Request Due Date email: fixed recipients from Master Data > People "Due Date Email" (020_due_mail_recipients.sql)
+  //   To = approvers, CC = admin who adjusts the data after approval; the user cannot remove them, only add more CC.
+  //   Nobody set to To: the email goes to the active Admins as before.
+  function dueRecipients() {
+    const set = v => activePeople().filter(p => p.due_mail === v);
+    return { to: set("To"), cc: set("CC").map(p => ({ name: p.name, role: "Admin (Due Date)" })) };
+  }
+  function dueToField() {
+    const { to } = dueRecipients();
+    if (!to.length) return `<div class="field full"><label>To / ถึง</label><p class="hint">ส่งถึง Admin ที่ใช้งานอยู่ (ยังไม่ได้ตั้งผู้อนุมัติใน Master Data &gt; People คอลัมน์ Due Date Email)</p></div>`;
+    return `<div class="field full"><label>To / ถึง <span class="small muted">(ผู้อนุมัติ ล็อกไว้ แก้ไม่ได้)</span></label><div class="cc-box" data-due-to>${to.map(p => p.email
+      ? `<span class="cc-chip locked" title="${esc(p.email)} · Approver">🔒 ${esc(p.name)} · Approver</span>`
+      : `<span class="cc-warn">Approver ${esc(p.name)} ไม่มีอีเมลใน People Master</span>`).join("")}</div></div>`;
+  }
   function renderDueCase() {
     const c = S.db.contracts.find(x => x.id === S.selectedContract && isOpen(x));
     const mine = S.db.due_date_requests.filter(r => visibleContracts().some(v => v.id === r.contract_id)).sort((a, b) => b.id - a.id).slice(0, 10);
@@ -1066,7 +1080,8 @@
         <div class="form-grid">
           <div class="field"><label>Requested Due Date <span class="req">*</span></label><input class="input" type="date" id="ddDate" value="${c ? esc(c.due_date) : ""}"></div>
           <div class="field" style="grid-column:span 2"><label>Reason / เหตุผล <span class="req">*</span></label><input class="input" id="ddReason" placeholder="เหตุผลที่ขอขยายเวลา"></div>
-          ${ccField(c?.owner, c && stationOwner(c))}
+          ${dueToField()}
+          ${ccField(c?.owner, c && stationOwner(c), dueRecipients().cc)}
           ${attachBox("due", attachRule("due"))}
         </div>
         <div class="form-actions"><button class="btn btn-primary" data-due-submit ${c ? "" : "disabled"}>Submit Request / ส่งคำขอ</button></div>
@@ -1080,7 +1095,9 @@
     const c = S.db.contracts.find(x => x.id === S.selectedContract);
     const date = $("#ddDate").value, reason = $("#ddReason").value.trim();
     if (!c || !date || !reason) return toast("กรุณาเลือกสัญญา วันที่ และเหตุผล", true);
-    const cc = takeCc(c.owner, stationOwner(c), ""); if (!cc) return;
+    const fixed = dueRecipients(), toFixed = fixed.to.map(p => String(p.email || "").toLowerCase()).filter(Boolean);
+    if (fixed.to.length && !toFixed.length) return toast("ผู้อนุมัติไม่มีอีเมลใน People Master กรุณาแจ้ง Admin", true);
+    const cc = takeCc(c.owner, stationOwner(c), toFixed, fixed.cc); if (!cc) return;
     if (!checkAttach("due", attachRule("due"))) return;
     const who = S.user.display_name || S.user.username, requester = (S.user.email || "").toLowerCase();
     await guard(async () => {
@@ -1091,13 +1108,15 @@
       S.attach.due = []; S.ccDraft = [];
       await reload(); render();
       toast("ส่งคำขอแล้ว รอ Admin อนุมัติ");
-      // Approval email goes to the active Admins: the first as To, the rest as CC
-      const admins = await window.Store.approvers().catch(e => { toast(e.message, true); return []; });
+      // Approval email: To = the fixed approvers (locked); without them, the active Admins (first as To, the rest as CC)
+      const admins = toFixed.length ? fixed.to.filter(p => p.email).map(p => ({ email: p.email, display_name: p.name }))
+        : await window.Store.approvers().catch(e => { toast(e.message, true); return []; });
       const emails = admins.map(a => (a.email || "").toLowerCase()).filter(Boolean);
       const fresh = S.db.contracts.find(x => x.id === c.id) || c;
-      openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", cc: [...emails.slice(1), ...cc.map(r => r.email)], lockedCc: lockedCc(cc), files,
+      openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", ...(toFixed.length ? { lockedTo: toFixed } : {}),
+        cc: [...(toFixed.length ? [] : emails.slice(1)), ...cc.map(r => r.email)], lockedCc: lockedCc(cc), files,
         title: "Send Due Date Approval Email",
-        ...caseEmail({ c: fresh, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: who, toName: admins[0]?.display_name || "Admin",
+        ...caseEmail({ c: fresh, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: who, toName: toFixed.length ? admins.map(a => a.display_name).join(", ") : admins[0]?.display_name || "Admin",
           reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason, files,
           extra: [["Request ID", "เลขที่คำขอ", req?.id], ["Current Due Date", "วันครบกำหนดปัจจุบัน", fmtDate(fresh.due_date)],
             ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(date)], ["Requester", "ผู้ขอ", `${who}${requester ? ` <${requester}>` : ""}`],
@@ -1260,15 +1279,20 @@
   // Send Status Update Email: To, CC, Subject, Message, Attachments. Saving already happened; this only sends.
   // Retry keeps the same requestId, so the email function never sends the same email twice and no Log is added.
   function openEmailModal(d) {
-    const st = { to: (d.to || "").toLowerCase(), cc: [], locked: (d.lockedCc || []).map(e => e.toLowerCase()), requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
-    (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && e !== st.to && !st.cc.includes(e)) st.cc.push(e); });
+    // d.lockedTo: fixed main recipients (Request Due Date approvers) shown as locked chips; the first is "to", the rest "toMore"
+    const toLocked = uniq((d.lockedTo || []).map(e => String(e || "").trim().toLowerCase()).filter(EMAIL_OK));
+    const st = { to: (toLocked[0] || d.to || "").toLowerCase(), toMore: toLocked.slice(1), cc: [], locked: (d.lockedCc || []).map(e => e.toLowerCase()), requestId: window.Mailer.newId("EMAIL"), sending: false, sent: false };
+    const isTo = e => e === st.to || st.toMore.includes(e);
+    (d.cc || []).forEach(e => { e = String(e || "").trim().toLowerCase(); if (EMAIL_OK(e) && !isTo(e) && !st.cc.includes(e)) st.cc.push(e); });
     const files = d.files || [];
     const ready = window.Mailer.configured();
     const totalBytes = files.reduce((n, f) => n + (Number(f.fileSize) || 0), 0);
     const linksOnly = files.length > 0 && totalBytes > EMAIL_ATTACH_BYTES;
     const root = openModal("emailRoot", d.title || "Send Status Update Email", `${d.contract.id} · ${d.action}`, `
       <div class="email-form">
-        <div class="field"><label>To / ถึง <span class="req">*</span></label><input class="input" type="email" id="emTo" value="${esc(st.to)}" placeholder="receiver@turtle23.com"></div>
+        ${toLocked.length
+          ? `<div class="field"><label>To / ถึง <span class="small muted">(ผู้อนุมัติ ล็อกไว้)</span></label><div class="cc-box" data-em-to>${toLocked.map(e => `<span class="cc-chip locked" title="ผู้รับหลัก (ล็อกไว้ ลบไม่ได้)">🔒 ${esc(e)}</span>`).join("")}</div><input type="hidden" id="emTo" value="${esc(st.to)}"></div>`
+          : `<div class="field"><label>To / ถึง <span class="req">*</span></label><input class="input" type="email" id="emTo" value="${esc(st.to)}" placeholder="receiver@turtle23.com"></div>`}
         <div class="field"><label>CC E-Mail / สำเนาถึง</label>
           <div class="cc-row"><select class="select cc-pick" id="emCcPick"><option value="">Employee Directory / เลือกตามแผนก</option>${ccByDept()}</select>
           <div class="cc-box"><span data-em-chips></span><input class="cc-input" id="emCc" list="emCcOptions" autocomplete="off" placeholder="พิมพ์อีเมลแล้วกด Enter หรือ ,"></div></div>
@@ -1288,13 +1312,13 @@
     const err = (en, th) => { $("[data-em-error]", root).innerHTML = en ? `${esc(en)}<br>${esc(th || "")}` : ""; };
     const preview = () => {
       const body = $("#emBody", root).value.trim();
-      $("[data-em-preview]", root).textContent = [`To: ${$("#emTo", root).value.trim() || "-"}`, `CC: ${st.cc.length ? st.cc.join(", ") : "-"}`,
+      $("[data-em-preview]", root).textContent = [`To: ${[$("#emTo", root).value.trim(), ...st.toMore].filter(Boolean).join(", ") || "-"}`, `CC: ${st.cc.length ? st.cc.join(", ") : "-"}`,
         `Subject: ${$("#emSubject", root).value.trim() || "-"}`, `Message: ${body.split("\n")[0].slice(0, 120)}${body.length > 120 ? " ..." : ""}`,
         `Attachments: ${files.length ? `${files.length} file${files.length > 1 ? "s" : ""}${linksOnly ? " (link to system)" : ""}` : "-"}`].join("\n");
     };
     const chips = () => {
       $("[data-em-chips]", root).innerHTML = st.cc.map((e, i) => st.locked.includes(e)
-        ? `<span class="cc-chip locked" title="Contract Owner (CC อัตโนมัติ)">🔒 ${esc(e)}</span>`
+        ? `<span class="cc-chip locked" title="CC อัตโนมัติ (ลบไม่ได้)">🔒 ${esc(e)}</span>`
         : `<span class="cc-chip" title="${esc(e)}">${esc(e)}<button type="button" data-em-del="${i}" aria-label="Remove">×</button></span>`).join("");
       preview();
     };
@@ -1302,7 +1326,7 @@
       const list = String(value || "").split(/[,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
       for (const e of list) {
         if (!EMAIL_OK(e)) { err("Enter a valid email address.", "กรุณากรอกอีเมลให้ถูกต้อง"); return false; }
-        if (e === $("#emTo", root).value.trim().toLowerCase()) { err("CC cannot be the same as To.", "CC ต้องไม่ซ้ำกับผู้รับหลัก (To)"); return false; }
+        if (e === $("#emTo", root).value.trim().toLowerCase() || st.toMore.includes(e)) { err("CC cannot be the same as To.", "CC ต้องไม่ซ้ำกับผู้รับหลัก (To)"); return false; }
         if (!st.cc.includes(e)) st.cc.push(e);
       }
       err(); chips(); return true;
@@ -1328,13 +1352,15 @@
       const to = $("#emTo", root).value.trim().toLowerCase();
       if (!EMAIL_OK(to)) { err("Enter a valid email address.", "กรุณากรอกอีเมลผู้รับ (To) ให้ถูกต้อง"); $("#emTo", root).focus(); return; }
       st.locked.forEach(x => { if (x !== to && !st.cc.includes(x)) st.cc.unshift(x); });
-      st.cc = st.cc.filter(x => x !== to); chips();
+      st.cc = st.cc.filter(x => x !== to && !st.toMore.includes(x)); chips();
       st.to = to; st.subject = $("#emSubject", root).value.trim(); st.body = $("#emBody", root).value;
       if (!st.subject) { err("Subject is required.", "กรุณากรอกหัวเรื่อง"); return; }
       err(); st.sending = true; btn.disabled = true; btn.textContent = "Sending..."; status.className = "email-status"; status.textContent = "";
       const payload = { requestId: st.requestId, contractId: d.contract.id, action: d.action, to, subject: st.subject, body: st.body,
         attachments: [], systemLink: contractUrl(d.contract) };
       if (st.cc.length) payload.cc = [...st.cc];
+      // toMore: the other approvers; also in cc so a send-email deployed before toMore still reaches them (as CC)
+      if (st.toMore.length) { payload.toMore = [...st.toMore]; payload.cc = [...st.toMore, ...(payload.cc || [])]; }
       payload.kind = d.kind;
       payload.attachments = files.filter(f => f.path).map(f => ({ path: f.path, fileName: f.fileName }));
       try {
@@ -1343,7 +1369,7 @@
         status.className = "email-status ok"; status.textContent = r.demo ? "Demo: ไม่ได้ส่งจริง" : "Sent / ส่งแล้ว";
         btn.textContent = "Sent";
         if (!r.demo) await logEmail(d, st, files, "Sent");
-        toast(r.demo ? "โหมดสาธิต: ไม่ได้ส่งอีเมลจริง" : `ส่งอีเมลถึง ${to} แล้ว`);
+        toast(r.demo ? "โหมดสาธิต: ไม่ได้ส่งอีเมลจริง" : `ส่งอีเมลถึง ${[to, ...st.toMore].join(", ")} แล้ว`);
         setTimeout(close, 900);
       } catch (ex) {
         status.className = "email-status fail"; status.textContent = "Send Failed / ส่งไม่สำเร็จ";
@@ -1358,7 +1384,7 @@
   async function logEmail(d, st, files, status, error) {
     try {
       await window.Store.insert("email_log", {
-        request_id: st.requestId, kind: d.kind, contract_id: d.contract.id, log_id: d.logId || null, to_email: st.to || null, cc: st.cc,
+        request_id: st.requestId, kind: d.kind, contract_id: d.contract.id, log_id: d.logId || null, to_email: [st.to, ...(st.toMore || [])].filter(Boolean).join(", ") || null, cc: st.cc,
         subject: st.subject || d.subject, attachments: files.map(f => ({ path: f.path, fileName: f.fileName, fileSize: f.fileSize })), status, error: error || null,
         sent_by: S.user.email || S.user.username || ""
       });
@@ -1383,7 +1409,9 @@
       uses: r => countWhere(S.db.contracts, c => c.department === r.name) + countWhere(S.db.people, p => p.department === r.name)
         + countWhere(S.db.user_access, u => u.department === r.name) + countWhere(S.db.contract_templates, t => t.department === r.name) },
     people: { title: "People", sub: "รายชื่อผู้รับผิดชอบ", track: true, required: ["name"], unique: [["name"], ["email"]],
-      cols: [["name", "Name", "key"], ["department", "Department", deptOptions], ["email", "Email"], ["line_user_id", "LINE User ID"], ["active", "Active", "bool"]],
+      // "Due Date Email" shows once 020_due_mail_recipients.sql has added the column
+      get cols() { return [["name", "Name", "key"], ["department", "Department", deptOptions], ["email", "Email"], ["line_user_id", "LINE User ID"],
+        ...((S.db.people || []).some(p => "due_mail" in p) ? [["due_mail", "Due Date Email", ["", "To", "CC"]]] : []), ["active", "Active", "bool"]]; },
       uses: r => countWhere(S.db.contracts, c => [c.owner, c.station_from, c.station_to].includes(r.name))
         + countWhere(S.db.contract_logs, l => l.from_person === r.name || l.to_person === r.name) },
     contract_types: { title: "Type of Contract", sub: "ประเภทสัญญาและ SLA มาตรฐาน (วันทำการ)", track: true,
@@ -1430,6 +1458,7 @@
       else if (kind === "flag") v = v === true;
       else if (typeof v === "string") v = v.trim();
       if (k === "email") v = v ? String(v).toLowerCase() : null;
+      if (k === "due_mail") v = v || null;
       o[k] = v;
     });
     if (def.track) o.locked = Boolean(r.locked);

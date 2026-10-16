@@ -27,7 +27,7 @@ export function resend(env: Env, http: typeof fetch = fetch): Provider {
         method: "POST",
         headers: { Authorization: `Bearer ${need(env, "RESEND_API_KEY")}`, "Content-Type": "application/json", "Idempotency-Key": m.idempotencyKey },
         body: JSON.stringify({
-          from: m.from, to: [m.to], ...(m.cc.length ? { cc: m.cc } : {}), ...(m.replyTo ? { reply_to: m.replyTo } : {}),
+          from: m.from, to: [m.to, ...(m.toMore || [])], ...(m.cc.length ? { cc: m.cc } : {}), ...(m.replyTo ? { reply_to: m.replyTo } : {}),
           subject: m.subject, text: m.text, html: m.html,
           ...(m.attachments.length ? { attachments: m.attachments.map(a => ({ filename: a.fileName, content: toBase64(a.content), content_type: a.mimeType })) } : {})
         })
@@ -73,7 +73,7 @@ export function graph(env: Env, http: typeof fetch = fetch): Provider {
       const addr = (address: string) => ({ emailAddress: { address } });
       const message = {
         subject: m.subject, body: { contentType: "HTML", content: m.html },
-        toRecipients: [addr(m.to)], ccRecipients: m.cc.map(addr), ...(m.replyTo ? { replyTo: [addr(m.replyTo)] } : {}),
+        toRecipients: [m.to, ...(m.toMore || [])].map(addr), ccRecipients: m.cc.map(addr), ...(m.replyTo ? { replyTo: [addr(m.replyTo)] } : {}),
         internetMessageHeaders: [{ name: "X-T23-Request-Id", value: m.idempotencyKey }]
       };
       const call = async (url: string, init: RequestInit, what: string) => {

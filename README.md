@@ -52,6 +52,7 @@ supabase/migrations/016_line_sending.sql  สวิตช์หลัก “ก�
 supabase/migrations/017_user_presence.sql  ผู้ใช้งานออนไลน์ตอนนี้ (Admin Tools): สัญญาณทุก 1 นาที ไม่เก็บ IP ขณะปิด Web app ไม่นับ Level 1-3
 supabase/migrations/018_attachment_links.sql  ลิงก์ตรงของไฟล์แนบเก่าที่มีแค่โฟลเดอร์ (เติมด้วย supabase/attachment-links/ ดู README-TH.md)
 supabase/migrations/019_overdue_mail.sql      อีเมลเตือนสัญญา R = Overdue ถึง Station Owner จันทร์–ศุกร์ 09:00 (supabase/functions/overdue-mail ดู README-TH.md)
+supabase/migrations/020_due_mail_recipients.sql อีเมล Request Due Date: ผู้อนุมัติ (To) และ Admin (CC) ที่ล็อกไว้ ตั้งใน Master Data > People คอลัมน์ Due Date Email
 supabase/functions/send-email/      Edge Function ส่งอีเมล (Resend หรือ Microsoft Graph) วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/line-notify/     Edge Function แจ้งเตือน Y/R เข้ากลุ่ม LINE ทุกวันทำการ 09:30 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/overdue-mail/    Edge Function อีเมลเตือน R = Overdue ถึง Station Owner ทุกวันทำการ 09:00 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น

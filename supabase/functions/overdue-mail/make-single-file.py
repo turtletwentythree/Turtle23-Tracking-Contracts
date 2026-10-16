@@ -10,7 +10,7 @@ unexport=lambda s: re.sub(r'^export (?=(async |function|const|class|interface|ty
 prov=re.sub(r'^import type .*\n', '', prov, flags=re.M)
 hand=re.sub(r'^import type .*\n', '', hand, flags=re.M)
 # types the providers need, defined once here
-types='''type Mail = { from: string; to: string; cc: string[]; replyTo?: string; subject: string; text: string; html: string; attachments: { fileName: string; mimeType: string; content: Uint8Array }[]; idempotencyKey: string };
+types='''type Mail = { from: string; to: string; toMore?: string[]; cc: string[]; replyTo?: string; subject: string; text: string; html: string; attachments: { fileName: string; mimeType: string; content: Uint8Array }[]; idempotencyKey: string };
 type Provider = { name: string; maxAttachBytes: number; send(mail: Mail): Promise<{ id: string }> };
 '''
 idx=re.sub(r'^import "\.\./_shared/sla-engine\.js";\n', '', idx, flags=re.M)
