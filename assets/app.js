@@ -711,7 +711,7 @@
           <button class="icon-button" data-close-drawer aria-label="Close">✕</button></div>
         <div class="drawer-body">
           <div class="kv-grid">
-            ${kv("Department", esc(c.department))}${kv("Contract Owner", esc(c.owner))}${kv("Station Owner", esc(c.station_to || "-"))}
+            ${kv("Department", esc(c.department))}${kv("Contract Owner", esc(c.owner))}${kv("Station Owner", esc(stationOwner(c) || "-"))}
             ${kv("Type of Contract", esc(c.type))}${kv("Sub Type / Work Type", esc(c.sub_type || "-"))}${kv("Vendor / Counter party", esc(c.vendor || "-"))}
             ${kv("Add Case Date", fmtDate(c.add_case_date))}${kv("Due Date", fmtDate(c.due_date))}${kv("System Due", fmtDate(c.system_due))}
             ${kv("Total SLA", m.totalSla == null ? "Configuration Required" : `${m.totalSla} วันทำการ`)}${kv("Accumulated Days", m.acc)}
@@ -878,7 +878,7 @@
     if (!c) return `<div class="current-card muted small">ยังไม่ได้เลือกสัญญา</div>`;
     const m = metrics(c);
     return `<div class="current-card"><b>${esc(c.id)} · ${esc(c.name)}</b> ${statusTag(m.code)} ${alertTag(m.alert)}
-      <div class="small muted" style="margin-top:4px">Latest Action: <b>${esc(m.action || "-")}</b> · Station: ${esc(c.station_from || "-")} → <b>${esc(c.station_to || "-")}</b> · Due ${fmtDate(c.due_date)} · Days on hand ${dayText(m.onHand)} · Accumulated ${m.acc} · Cycle ${c.cycle} · Returns ${c.returns}</div></div>`;
+      <div class="small muted" style="margin-top:4px">Latest Action: <b>${esc(m.action || "-")}</b> · Station: ${esc(latestLog(c.id)?.from_person || c.station_from || "-")} → <b>${esc(stationOwner(c) || "-")}</b> · Due ${fmtDate(c.due_date)} · Days on hand ${dayText(m.onHand)} · Accumulated ${m.acc} · Cycle ${c.cycle} · Returns ${c.returns}</div></div>`;
   }
 
   function renderUpdateCase() {
@@ -984,13 +984,22 @@
     });
   }
 
+  // Re-read the data just before saving, so the From is right even when someone else moved the case after this page loaded
+  async function freshCase(c) {
+    if (window.Store.mode === "supabase") await reload().catch(e => console.warn("Refresh failed", e));
+    return S.db.contracts.find(x => x.id === c.id) || c;
+  }
   async function submitUpdate() {
-    const c = S.db.contracts.find(x => x.id === S.selectedContract);
+    let c = S.db.contracts.find(x => x.id === S.selectedContract);
     const action = $("#upAction").value, to = $("#upTo").value, date = $("#upDate").value || todayISO(), reason = $("#upReason").value.trim();
     if (!c || !action || !to) return toast("กรุณาเลือก Contract, Action และผู้รับ", true);
     const cc = takeCc(c.owner, stationOwner(c), personEmail(to)); if (!cc) return;
     if (!checkAttach("update", attachRule("update", action))) return;
+    c = await freshCase(c);
     const last = latestLog(c.id);
+    // From = who holds the case now: the To of the latest Action log (contracts.station_to can lag behind it,
+    // e.g. after an import or a Log edit), so repeated Return / Resubmit / Forward keep the chain right
+    const holder = stationOwner(c) || c.owner;
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const cycle = c.cycle + (action === "Resubmit" ? 1 : 0);
     const returns = c.returns + (action === "Return" ? 1 : 0);
@@ -1004,11 +1013,11 @@
       // Contract first, then the new log: only the current Station Owner or Contract Owner may write (013_own_cases.sql),
       // and the new log hands the case to the next person
       await window.Store.update("contracts", c.id, {
-        stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: c.station_to || c.owner, station_to: to, station_in: date
+        stage: STAGE_BY_ACTION[action] || action, cycle, returns, station_from: holder, station_to: to, station_in: date
       });
       if (last && !last.out_date) await window.Store.update("contract_logs", last.id, { out_date: date });
       const log = await window.Store.insert("contract_logs", {
-        contract_id: c.id, log_no: logNo, cycle, action, from_person: c.station_to || c.owner, to_person: to,
+        contract_id: c.id, log_no: logNo, cycle, action, from_person: holder, to_person: to,
         in_date: date, sla: aSla, action_sla: aSla, days_on_hand: onHand, alert: ALERT_LABEL[alert], cc_recipients: cc,
         attachments: files, reason, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
@@ -1017,7 +1026,7 @@
       toast(`อัปเดต ${c.id} แล้ว`);
       const fresh = S.db.contracts.find(x => x.id === c.id) || c, def = (S.db.action_sla || []).find(a => a.action === action);
       openEmailModal({ kind: "update_status", contract: fresh, logId: log?.id, action, to: personEmail(to), cc: cc.map(r => r.email), lockedCc: lockedCc(cc), files,
-        ...caseEmail({ c: fresh, action, from: c.station_to || c.owner, toName: to, reason, files,
+        ...caseEmail({ c: fresh, action, from: holder, toName: to, reason, files,
           extra: [["Action SLA", "SLA ของขั้นตอน", aSla == null ? "-" : `${aSla} Working Days / วันทำการ`], ["Description", "คำอธิบาย", def?.description || ""]] }) });
     });
   }
@@ -1043,7 +1052,7 @@
   }
 
   async function submitClose() {
-    const c = S.db.contracts.find(x => x.id === S.selectedContract);
+    let c = S.db.contracts.find(x => x.id === S.selectedContract);
     if (!c) return toast("กรุณาเลือกสัญญา", true);
     const result = $("#clResult").value, date = $("#clDate").value || todayISO(), note = $("#clNote").value.trim();
     const owner = $("#clOwner").value || c.owner, toEmail = $("#clTo").value;
@@ -1052,6 +1061,7 @@
     if (!toEmail) return toast("กรุณาเลือกผู้รับอีเมล (To)", true);
     const cc = takeCc(c.owner, stationOwner(c), toEmail); if (!cc) return;
     if (!checkAttach("close", attachRule("close"))) return;
+    c = await freshCase(c);
     const last = latestLog(c.id);
     const logNo = Math.max(0, ...logsOf(c.id).map(l => Number(l.log_no) || 0)) + 1;
     const who = S.user.display_name || S.user.username;
@@ -1064,7 +1074,7 @@
       const log = await window.Store.insert("contract_logs", {
         contract_id: c.id, log_no: logNo, cycle: c.cycle, action,
         alert: result === "Closed" ? "B=Completed" : "B=Cancelled", days_on_hand: 0, attachments: files, cc_recipients: cc,
-        from_person: c.station_to, to_person: owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
+        from_person: stationOwner(c) || c.owner, to_person: owner, in_date: date, out_date: date, reason: note, approval: "OK", updated_by: who, updated_at: new Date().toISOString()
       });
       S.selectedContract = null; S.attach.close = []; S.ccDraft = [];
       await reload(); renderNav(); render();
