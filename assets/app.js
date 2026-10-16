@@ -227,6 +227,8 @@
   }
   function route() {
     if (closedForMe()) { renderClosed(); return beat(); }
+    // Approval email link #/approve/<Request ID> opens Admin Tools at Due Date Approval (see openLinkedContract)
+    if (/^#\/approve\b/.test(location.hash)) { rememberLinkedContract(); history.replaceState(null, "", "#/admin"); }
     const id = (location.hash.match(/^#\/(\w+)/) || [])[1] || "dashboard";
     const v = VIEWS.find(x => x.id === id && can(x.min)) || VIEWS[0];
     if (v.id !== id) {
@@ -262,13 +264,33 @@
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
   // Email links point to #/contracts/<Contract ID> (or #/confidential/...): the page opens that contract's drawer,
   // where the Log and its attachments are. The link survives the Microsoft sign-in (kept in sessionStorage).
-  const LINK_KEY = "t23-open-contract";
+  // The Due Date approval email links #/approve/<Request ID>: Admin Tools > Due Date Approval with that request highlighted.
+  const LINK_KEY = "t23-open-contract", APPROVE_KEY = "t23-open-approval";
   function rememberLinkedContract() {
     const m = location.hash.match(/^#\/(?:contracts|confidential)\/([\w.-]+)/);
     if (m) try { sessionStorage.setItem(LINK_KEY, decodeURIComponent(m[1])); } catch (e) { /* private mode */ }
+    const a = location.hash.match(/^#\/approve(?:\/(\d+))?/);
+    if (a) try { sessionStorage.setItem(APPROVE_KEY, a[1] || "all"); } catch (e) { /* private mode */ }
+  }
+  function openLinkedApproval() {
+    let id = ""; try { id = sessionStorage.getItem(APPROVE_KEY) || ""; sessionStorage.removeItem(APPROVE_KEY); } catch (e) { return; }
+    if (!id) return;
+    if (!can(4)) return toast("การอนุมัติ Due Date ต้องใช้สิทธิ์ Admin (Level 4) กรุณาแจ้งผู้ดูแลระบบ", true);
+    if (S.view !== "admin") { history.replaceState(null, "", "#/admin"); S.view = "admin"; renderNav(); render(); }
+    setTimeout(() => {
+      const box = $("#due-approval"); if (!box) return;
+      const row = id !== "all" && $(`tr[data-req="${id}"]`, box);
+      box.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (row) { row.classList.add("row-flash"); $(`#final-${id}`)?.focus({ preventScroll: true }); }
+      else if (id !== "all") {
+        const r = (S.db.due_date_requests || []).find(x => String(x.id) === id);
+        toast(r ? `คำขอ #${id} ${r.status === "Approved" ? "อนุมัติแล้ว" : r.status === "Rejected" ? "ถูกปฏิเสธแล้ว" : "ดำเนินการแล้ว"}${r.decided_by ? ` โดย ${r.decided_by}` : ""}` : `ไม่พบคำขอ #${id}`);
+      }
+    }, 50);
   }
   function openLinkedContract() {
     rememberLinkedContract();
+    openLinkedApproval();
     let id = ""; try { id = sessionStorage.getItem(LINK_KEY) || ""; sessionStorage.removeItem(LINK_KEY); } catch (e) { return; }
     if (!id) return;
     const c = S.db.contracts.find(x => x.id === id);
@@ -1120,7 +1142,7 @@
           reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason, files,
           extra: [["Request ID", "เลขที่คำขอ", req?.id], ["Current Due Date", "วันครบกำหนดปัจจุบัน", fmtDate(fresh.due_date)],
             ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(date)], ["Requester", "ผู้ขอ", `${who}${requester ? ` <${requester}>` : ""}`],
-            ["Approve in", "อนุมัติที่", "Admin Tools > Due Date Approval"]] }) });
+            ["Approve in", "อนุมัติที่", `Admin Tools > Due Date Approval: ${systemUrl()}#/approve/${req?.id || ""}`]] }) });
     });
   }
 
@@ -1662,9 +1684,9 @@
     ${renderAppSwitch()}
     ${renderOnline()}
     ${renderImport()}
-    <section class="panel"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
+    <section class="panel" id="due-approval"><div class="panel-head"><div><h2>Due Date Approval <span class="tag tag-dark">Admin Only</span></h2><p>อนุมัติการปรับวันครบกำหนด</p></div></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Current Due</th><th>Requested Due Date</th><th>Reason</th><th>Requested By</th><th>Final Due</th><th>Remark</th><th>Decision</th></tr></thead>
-      <tbody>${pending.map(r => { const c = S.db.contracts.find(x => x.id === r.contract_id); return `<tr><td>${r.id}</td><td><button class="id-link" data-open="${esc(r.contract_id)}">${esc(r.contract_id)}</button></td>
+      <tbody>${pending.map(r => { const c = S.db.contracts.find(x => x.id === r.contract_id); return `<tr data-req="${r.id}"><td>${r.id}</td><td><button class="id-link" data-open="${esc(r.contract_id)}">${esc(r.contract_id)}</button></td>
         <td>${fmtDate(c?.due_date)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}${logFiles(Array.isArray(r.attachments) ? r.attachments : [])}</td><td>${esc(r.requested_by)}</td>
         <td><input class="cell-input" type="date" value="${esc(r.requested_due)}" id="final-${r.id}"></td>
         <td><input class="cell-input" id="remark-${r.id}" placeholder="Approval Remark"></td>

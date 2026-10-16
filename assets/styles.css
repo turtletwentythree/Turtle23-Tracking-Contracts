@@ -371,6 +371,7 @@ table.grid.compact td { padding: 6px 8px; }
 .master-search { width: 180px; }
 .master-show { width: auto; }
 .grid tr.row-changed td { background: #fbf7e4; }
+.grid tr.row-flash td { background: #eef7d0; box-shadow: inset 0 0 0 9999px rgba(184,212,51,.18); transition: background 1s; }
 .grid tr.row-inactive td { color: var(--muted); }
 .grid tr.row-inactive .cell-input { color: var(--muted); }
 .req { color: var(--t23-orange-dark); }
