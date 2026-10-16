@@ -1138,12 +1138,26 @@
       openEmailModal({ kind: "due_request", contract: fresh, action: "Due Date Request", to: emails[0] || "", ...(toFixed.length ? { lockedTo: toFixed } : {}),
         cc: [...(toFixed.length ? [] : emails.slice(1)), ...cc.map(r => r.email)], lockedCc: lockedCc(cc), files,
         title: "Send Due Date Approval Email",
-        ...caseEmail({ c: fresh, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: who, toName: toFixed.length ? admins.map(a => a.display_name).join(", ") : admins[0]?.display_name || "Admin",
-          reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason, files,
-          extra: [["Request ID", "เลขที่คำขอ", req?.id], ["Current Due Date", "วันครบกำหนดปัจจุบัน", fmtDate(fresh.due_date)],
-            ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(date)], ["Requester", "ผู้ขอ", `${who}${requester ? ` <${requester}>` : ""}`],
-            ["Approve in", "อนุมัติที่", `Admin Tools > Due Date Approval: ${systemUrl()}#/approve/${req?.id || ""}`]] }) });
+        ...dueEmail({ id: req?.id, requested_due: date, reason, requested_by: who, requester_email: requester }, fresh, toFixed.length ? admins.map(a => a.display_name).join(", ") : admins[0]?.display_name || "Admin", files) });
     });
+  }
+  // Subject and body of the approval email (also used by the Admin "Test email" button on Due Date Approval)
+  function dueEmail(r, c, toName, files = []) {
+    return caseEmail({ c, action: "Due Date Request", actionTh: "ขออนุมัติปรับวันครบกำหนด", from: r.requested_by, toName,
+      reasonLabel: "Reason / เหตุผลที่ขอปรับ", reason: r.reason, files,
+      extra: [["Request ID", "เลขที่คำขอ", r.id], ["Current Due Date", "วันครบกำหนดปัจจุบัน", fmtDate(c.due_date)],
+        ["Requested Due Date", "วันครบกำหนดที่ขอ", fmtDate(r.requested_due)], ["Requester", "ผู้ขอ", `${r.requested_by}${r.requester_email ? ` <${r.requester_email}>` : ""}`],
+        ["Approve in", "อนุมัติที่", `Admin Tools > Due Date Approval: ${systemUrl()}#/approve/${r.id || ""}`]] });
+  }
+  // Admin: send the approval email of a pending request to an address of your choice (default: yourself) to see how it looks.
+  // No CC, nothing is changed and no Log is added.
+  function testDueEmail(id) {
+    const r = (S.db.due_date_requests || []).find(x => String(x.id) === String(id)); if (!r) return;
+    const c = S.db.contracts.find(x => x.id === r.contract_id); if (!c) return toast("ไม่พบสัญญาของคำขอนี้", true);
+    const files = Array.isArray(r.attachments) ? r.attachments : [];
+    const mail = dueEmail(r, c, dueRecipients().to.map(p => p.name).join(", ") || "Admin", files);
+    openEmailModal({ kind: "due_request_test", contract: c, action: "Due Date Request (Test)", to: (S.user?.email || "").toLowerCase(), cc: [], files,
+      title: "Test: Due Date Approval Email", ...mail, subject: `[TEST] ${mail.subject}` });
   }
 
   // ───────────── Attachments (Supabase Storage) ─────────────
@@ -1690,7 +1704,8 @@
         <td>${fmtDate(c?.due_date)}</td><td>${fmtDate(r.requested_due)}</td><td>${esc(r.reason)}${logFiles(Array.isArray(r.attachments) ? r.attachments : [])}</td><td>${esc(r.requested_by)}</td>
         <td><input class="cell-input" type="date" value="${esc(r.requested_due)}" id="final-${r.id}"></td>
         <td><input class="cell-input" id="remark-${r.id}" placeholder="Approval Remark"></td>
-        <td style="white-space:nowrap"><button class="btn btn-sm btn-green" data-approve="${r.id}">Approve</button> <button class="btn btn-sm btn-danger" data-reject="${r.id}">Reject</button></td></tr>`; }).join("")
+        <td style="white-space:nowrap"><button class="btn btn-sm btn-green" data-approve="${r.id}">Approve</button> <button class="btn btn-sm btn-danger" data-reject="${r.id}">Reject</button>
+          <button class="btn btn-sm" data-due-test="${r.id}" title="ส่งอีเมลขออนุมัติของคำขอนี้ไปที่อีเมลที่เลือก (ค่าเริ่มต้น: อีเมลของคุณ) เพื่อดูหน้าตา ไม่มี CC และไม่เปลี่ยนข้อมูล">📧 Test</button></td></tr>`; }).join("")
         || `<tr><td colspan="9">No Due Date requests</td></tr>`}</tbody></table></div>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Request ID</th><th>Contract</th><th>Decision</th><th>Final Due Date</th><th>Admin</th><th>Date</th></tr></thead>
       <tbody>${history.map(r => `<tr><td>${r.id}</td><td>${esc(r.contract_id)}</td><td>${reqTag(r.status)}</td><td>${fmtDate(r.final_due)}</td><td>${esc(r.decided_by)}</td><td>${fmtDate(String(r.decided_at || "").slice(0, 10))}</td></tr>`).join("")
@@ -2238,6 +2253,7 @@
       S.adminTab = b.dataset.atab; S.masterDraft = null; render();
     }));
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
+    $$("[data-due-test]", root).forEach(b => b.addEventListener("click", () => testDueEmail(b.dataset.dueTest)));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     bindLine(root);
     bindOverdue(root);
