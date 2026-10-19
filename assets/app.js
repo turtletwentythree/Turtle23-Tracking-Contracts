@@ -1589,6 +1589,9 @@
       else if (typeof v === "string") v = v.trim();
       if (k === "email") v = v ? String(v).toLowerCase() : null;
       if (k === "due_mail") v = v || null;
+      // A row added by hand (or by CSV) has no "Managed by" yet; saved together with other rows it would go up as null
+      if (k === "source" && !v) v = "manual";
+      if (k === "role" && !v) v = "viewer"; // the dropdown already shows Level 1 for a new row
       o[k] = v;
     });
     if (def.track) o.locked = Boolean(r.locked);
