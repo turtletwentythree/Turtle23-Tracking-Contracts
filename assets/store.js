@@ -55,6 +55,8 @@
       storage.setItem(this.sessionKey, JSON.stringify(user));
       return user;
     }
+    async userPassword() { throw new Error("โหมดสาธิตไม่สร้างบัญชีจริง (ใช้ได้เมื่อเชื่อม Supabase)"); }
+    async changePassword() { throw new Error("โหมดสาธิตไม่เปลี่ยนรหัสผ่าน"); }
     async signInMicrosoft() { throw new Error("โหมดสาธิตยังไม่ได้เชื่อม Microsoft 365 กรุณาใช้บัญชีทดลองด้านล่าง"); }
     async currentUser() {
       const raw = storage.getItem(this.sessionKey); if (!raw) return null;
@@ -283,7 +285,23 @@
         await this.client.auth.signOut();
         throw new Error(`บัญชี ${authUser.email} ยังไม่ได้รับสิทธิ์ใช้งาน หรือถูกระงับ กรุณาติดต่อผู้ดูแลระบบ`);
       }
-      return { id: authUser.id, email: row.email, username: row.email, display_name: row.display_name || row.email, role: row.role };
+      // Password accounts (made by an Admin through the Edge Function user-password) must choose their own password first
+      const passwordAccount = authUser.app_metadata?.t23_password === true;
+      return { id: authUser.id, email: row.email, username: row.email, display_name: row.display_name || row.email, role: row.role,
+        passwordAccount, mustChangePassword: passwordAccount && authUser.user_metadata?.must_change_password === true };
+    }
+    async changePassword(password) {
+      const { error } = await this.client.auth.updateUser({ password, data: { must_change_password: false } });
+      if (error) throw new Error(/different/i.test(error.message) ? "รหัสผ่านใหม่ต้องไม่ซ้ำรหัสเดิม" : error.message);
+    }
+    // Admin sets or resets an outside person's password (supabase/functions/user-password)
+    async userPassword(body) {
+      const { data, error } = await this.client.functions.invoke("user-password", { body });
+      if (!error) return data;
+      let message = error.message;
+      try { const j = await error.context.json(); message = j.error || message; } catch (e) { /* no JSON reply */ }
+      if (/Failed to send a request|not found|404/i.test(message)) message = `ยังไม่ได้ติดตั้ง Edge Function user-password หรือเชื่อมต่อไม่ได้: ${message}`;
+      throw new Error(message);
     }
     async signInMicrosoft(email) {
       const redirectTo = window.location.origin + window.location.pathname;

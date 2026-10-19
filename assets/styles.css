@@ -452,3 +452,7 @@ button.log-file { background: none; border: 0; padding: 0; cursor: pointer; font
 
 /* Overdue Email preview: the email as it will look, kept inside the page */
 .od-mail { background: #fff; border: 1px solid var(--line, #e2e5e8); border-radius: 8px; padding: 16px; max-width: 860px; overflow-x: auto; }
+
+/* Admin Tools > Users & Roles > 🔑 password result */
+.pw-result { margin-top: 10px; padding: 12px; border-radius: 6px; background: var(--surface-2, rgba(127,127,127,.12)); }
+.pw-code { font-size: 16px; user-select: all; padding: 2px 6px; }

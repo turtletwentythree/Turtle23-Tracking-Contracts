@@ -56,6 +56,7 @@ supabase/migrations/020_due_mail_recipients.sql อีเมล Request Due Date
 supabase/functions/send-email/      Edge Function ส่งอีเมล (Resend หรือ Microsoft Graph) วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/line-notify/     Edge Function แจ้งเตือน Y/R เข้ากลุ่ม LINE ทุกวันทำการ 09:30 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/overdue-mail/    Edge Function อีเมลเตือน R = Overdue ถึง Station Owner ทุกวันทำการ 09:00 วิธีติดตั้งดู README-TH.md ในโฟลเดอร์นั้น
+supabase/functions/user-password/   Edge Function ให้ Admin ตั้ง/รีเซ็ตรหัสผ่านบัญชีคนนอก (Level 1-3) ดู README-TH.md ในโฟลเดอร์นั้น
 supabase/functions/_shared/sla-engine.js  กฎ SLA ชุดเดียวที่ทั้งเว็บและ LINE ใช้ร่วมกัน
 .github/workflows/deploy.yml         deploy ขึ้น GitHub Pages
 ```

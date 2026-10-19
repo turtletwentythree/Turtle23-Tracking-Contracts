@@ -32,7 +32,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           EMAIL_DOMAIN: ${{ vars.EMAIL_DOMAIN || 'turtle23.com' }}
           PARTNER_EMAIL_DOMAINS: ${{ vars.PARTNER_EMAIL_DOMAINS || 'btsgroup.co.th' }}
-          ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'false' }}
+          ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'true' }}
         # Values are trimmed (a pasted secret often ends with a newline) and JSON-escaped,
         # so a stray character can never break config.js and drop the site into demo mode.
         run: |

@@ -33,6 +33,7 @@
         <p class="ms-note">ระบบจะพาไปหน้า Microsoft Entra ของ Turtle23 เพื่อใส่รหัสผ่าน สิทธิ์การใช้งานกำหนดโดยผู้ดูแลระบบ</p>
         <p class="ms-note" id="msNote" hidden></p>
         <div class="login-divider" id="loginDivider"><span>หรือ</span></div>
+        <p class="ms-note" id="loginPwNote" hidden>บุคคลภายนอกที่ได้รับบัญชีจากผู้ดูแลระบบ: เข้าด้วยอีเมลและรหัสผ่านด้านล่าง</p>
         <form class="login-form" id="loginForm" novalidate>
           <div class="login-field">
             <label for="loginUsername">Email</label>
@@ -93,6 +94,7 @@
             </button>
             <div class="profile-dropdown" id="profileDropdown" hidden>
               <p id="profileDetail"></p>
+              <button class="btn" id="changePwBtn" type="button" style="width:100%;margin-bottom:6px" hidden>เปลี่ยนรหัสผ่าน / Change password</button>
               <button class="btn" id="logoutBtn" type="button" style="width:100%">Sign Out / ออกจากระบบ</button>
             </div>
           </div>

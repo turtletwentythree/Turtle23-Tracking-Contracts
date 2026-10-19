@@ -138,6 +138,11 @@
     const btn = $("#loginSubmit");
     btn.disabled = true; btn.textContent = "Signing in...";
     try {
+      if (window.Store.mode === "supabase") {
+        const domain = (window.APP_CONFIG?.EMAIL_DOMAIN || "turtle23.com").toLowerCase();
+        if (!username.includes("@") || username.toLowerCase().endsWith("@" + domain)) throw new Error(`พนักงาน @${domain} กรุณาเข้าด้วยปุ่ม Sign in with Microsoft 365 · ช่องนี้สำหรับบัญชีรหัสผ่านที่ Admin สร้างให้คนนอก`);
+        window.Store.setRemember?.($("#msRemember").checked, "");
+      }
       S.user = await window.Store.signIn(username, password);
       await enterApp();
     } catch (e) {
@@ -156,12 +161,71 @@
     $("#profileName").textContent = S.user.display_name || S.user.username;
     $("#profileRole").textContent = `${r.label} · ${r.nameEn}`;
     $("#profileAvatar").textContent = (S.user.display_name || S.user.username || "?").charAt(0).toUpperCase();
-    $("#profileDetail").innerHTML = `${esc(S.user.email || S.user.username)}<br>${esc(r.nameEn)} · ${esc(r.nameTh)} (Level ${r.level})<br>${window.Store.mode === "supabase" ? "Signed in with Microsoft 365" : "Demo account"}`;
+    $("#profileDetail").innerHTML = `${esc(S.user.email || S.user.username)}<br>${esc(r.nameEn)} · ${esc(r.nameTh)} (Level ${r.level})<br>${window.Store.mode !== "supabase" ? "Demo account" : S.user.passwordAccount ? "Signed in with password" : "Signed in with Microsoft 365"}`;
+    $("#changePwBtn").hidden = !S.user.passwordAccount;
     const live = window.Store.mode === "supabase";
     $("#syncDot").classList.toggle("live", live);
     $("#syncText").textContent = live ? "Connected to Supabase" : "Demo mode · ข้อมูลในเบราว์เซอร์";
     startBeat();
     route();
+    if (S.user.mustChangePassword) openChangePassword(true);
+  }
+
+  // Password accounts: first sign-in (and after an Admin reset) must choose a new password before using the web app
+  const pwProblem = p => p.length < 10 || !/[A-Za-z]/.test(p) || !/\d/.test(p) ? "รหัสผ่านต้องยาวอย่างน้อย 10 ตัว และมีทั้งตัวอักษรและตัวเลข" : "";
+  function openChangePassword(forced) {
+    const body = `${forced ? `<p>รหัสผ่านนี้ผู้ดูแลระบบตั้งให้ กรุณาตั้งรหัสผ่านใหม่ของคุณเองก่อนใช้งาน</p>` : ""}
+      <div class="form-grid" style="grid-template-columns:1fr"><div class="field"><label for="newPw1">รหัสผ่านใหม่ (อย่างน้อย 10 ตัว มีตัวอักษรและตัวเลข)</label><input class="input" type="password" id="newPw1" autocomplete="new-password"></div>
+      <div class="field"><label for="newPw2">ยืนยันรหัสผ่านใหม่</label><input class="input" type="password" id="newPw2" autocomplete="new-password"></div></div>
+      <div class="login-error" id="newPwErr" role="alert"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">${forced ? `<button class="btn" data-pw-logout>ออกจากระบบ</button>` : ""}<button class="btn btn-primary" data-pw-save>บันทึกรหัสผ่าน</button></div>`;
+    const root = openModal("pwRoot", "ตั้งรหัสผ่านใหม่", "Change password", body);
+    if (forced) { // cannot be dismissed: choose a password or sign out
+      $(".modal-head .icon-button", root)?.remove();
+      const back = $(".modal-backdrop", root); back.replaceWith(back.cloneNode(true));
+      $("[data-pw-logout]", root).addEventListener("click", () => { root.innerHTML = ""; $("#logoutBtn").click(); });
+    }
+    const err = m => { const e = $("#newPwErr", root); e.textContent = m; e.classList.toggle("show", Boolean(m)); };
+    $("[data-pw-save]", root).addEventListener("click", async e => {
+      const btn = e.currentTarget, a = $("#newPw1", root).value, b = $("#newPw2", root).value;
+      if (pwProblem(a)) return err(pwProblem(a));
+      if (a !== b) return err("รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+      btn.disabled = true;
+      try { await window.Store.changePassword(a); S.user.mustChangePassword = false; root.innerHTML = ""; toast("เปลี่ยนรหัสผ่านแล้ว"); }
+      catch (x) { err(x.message); btn.disabled = false; }
+    });
+    $("#newPw1", root).focus();
+  }
+
+  // Admin Tools > Users & Roles: email + password sign-in for a person outside Turtle23 (Level 1-3, Edge Function user-password)
+  const canHavePassword = r => !r.__new && r.active !== false && ["viewer", "user", "confidential"].includes(r.role)
+    && /@/.test(r.email || "") && String(r.email).toLowerCase().split("@")[1] !== (window.APP_CONFIG?.EMAIL_DOMAIN || "turtle23.com").toLowerCase();
+  function openSetPassword(email) {
+    const body = `<p>ตั้งหรือรีเซ็ตรหัสผ่านให้ <b>${esc(email)}</b> เพื่อเข้าระบบด้วยอีเมลและรหัสผ่าน (ช่อง Email / Password หน้า Login) สิทธิ์เป็นไปตาม Level ใน Users &amp; Roles</p>
+      <label class="ms-remember"><input type="radio" name="pwMode" value="auto" checked> สุ่มรหัสผ่านให้ (แนะนำ)</label>
+      <label class="ms-remember"><input type="radio" name="pwMode" value="own"> กำหนดเอง</label>
+      <input class="input" type="text" id="pwOwn" placeholder="อย่างน้อย 10 ตัว มีตัวอักษรและตัวเลข" autocomplete="off" hidden>
+      <p class="small muted">ผู้ใช้จะถูกบังคับให้ตั้งรหัสผ่านใหม่เองเมื่อเข้าระบบครั้งแรก · ถ้ามีบัญชีอยู่แล้ว รหัสเดิมใช้ไม่ได้ทันที</p>
+      <div class="login-error" id="pwErr" role="alert"></div><div id="pwOut"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn btn-primary" data-pw-go>ตั้งรหัสผ่าน</button></div>`;
+    const root = openModal("pwRoot", "ตั้งรหัสผ่าน (บัญชีคนนอก)", email, body);
+    const err = m => { const e = $("#pwErr", root); e.textContent = m; e.classList.toggle("show", Boolean(m)); };
+    const mode = () => $("[name=pwMode]:checked", root).value;
+    $$("[name=pwMode]", root).forEach(r => r.addEventListener("change", () => { $("#pwOwn", root).hidden = mode() !== "own"; }));
+    $("[data-pw-go]", root).addEventListener("click", async e => {
+      const btn = e.currentTarget, own = mode() === "own" ? $("#pwOwn", root).value : "";
+      if (mode() === "own" && pwProblem(own)) return err(pwProblem(own));
+      err(""); btn.disabled = true; btn.textContent = "กำลังตั้ง…";
+      try {
+        const r = await window.Store.userPassword({ mode: "set", email, password: own || undefined });
+        btn.remove(); $$("[name=pwMode], #pwOwn", root).forEach(x => { x.disabled = true; });
+        $("#pwOut", root).innerHTML = `<div class="pw-result"><b>${r.created ? "สร้างบัญชีแล้ว" : "รีเซ็ตรหัสผ่านแล้ว"}</b>
+          ${r.password ? `<br>รหัสผ่านชั่วคราว: <code class="pw-code">${esc(r.password)}</code> <button class="btn btn-sm" data-pw-copy>คัดลอก</button>
+          <br><span class="small">แสดงครั้งเดียว ส่งให้ผู้ใช้ทางช่องทางส่วนตัว (เช่น โทรหรือ SMS) อย่าโพสต์ในกลุ่มแชท</span>` : ""}</div>`;
+        $("[data-pw-copy]", root)?.addEventListener("click", () => copyText(r.password));
+        toast(r.created ? `สร้างบัญชี ${email} แล้ว` : `รีเซ็ตรหัสผ่าน ${email} แล้ว`);
+      } catch (x) { err(x.message); btn.disabled = false; btn.textContent = "ตั้งรหัสผ่าน"; }
+    });
   }
 
   // Partner companies (e.g. BTS Group) sign in as Entra guests of Turtle23: Microsoft sends them to their own company's
@@ -179,6 +243,7 @@
     $("#demoAccountSection").hidden = !demo;
     $("#loginForm").hidden = !passwordAllowed;
     $("#loginDivider").hidden = !passwordAllowed;
+    if (!demo && passwordAllowed) { $("#loginPwNote").hidden = false; $("#loginUsername").placeholder = "name@company.com"; }
     // "Remember me": stay signed in on this browser and pre-fill the email next time
     const rem = window.Store.remembered?.();
     if (rem) { $("#msRemember").checked = rem.on; if (rem.email) $("#msEmail").value = rem.email; }
@@ -1746,7 +1811,8 @@
     ${S.adminTab === "access_audit" ? renderAudit() : S.adminTab === "entra_role_mappings" ? renderGrid("entra_role_mappings", true, { saveLabel: "Save Mapping" })
       : renderGrid("user_access", true, { saveLabel: "Save Users", extraCol: { label: "Last Microsoft sign-in", value: r => {
       const p = (S.db.profiles || []).find(x => x.email === r.email);
-      return p?.last_sign_in_at ? fmtDate(String(p.last_sign_in_at).slice(0, 10)) : '<span class="muted">ยังไม่เคยเข้า</span>';
+      return (p?.last_sign_in_at ? fmtDate(String(p.last_sign_in_at).slice(0, 10)) : '<span class="muted">ยังไม่เคยเข้า</span>')
+        + (canHavePassword(r) ? ` <button class="btn btn-sm" data-pw-set="${esc(r.email)}" title="บัญชีอีเมล + รหัสผ่านสำหรับคนนอก (Level 1-3)">🔑 รหัสผ่าน</button>` : "");
     } } })}
 
     ${renderLine()}
@@ -2283,6 +2349,7 @@
     }));
     $$("[data-approve]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.approve, "Approved")));
     $$("[data-due-test]", root).forEach(b => b.addEventListener("click", () => testDueEmail(b.dataset.dueTest)));
+    $$("[data-pw-set]", root).forEach(b => b.addEventListener("click", () => openSetPassword(b.dataset.pwSet)));
     $$("[data-reject]", root).forEach(b => b.addEventListener("click", () => decide(b.dataset.reject, "Rejected")));
     bindLine(root);
     bindOverdue(root);
@@ -2330,9 +2397,10 @@
       const top = ["logActionRoot", "logViewRoot"].map(id => $(`#${id}`)).find(r => r && r.innerHTML);
       if (top) top.innerHTML = ""; else closeDrawer();
     });
+    $("#changePwBtn").addEventListener("click", () => { $("#profileDropdown").hidden = true; openChangePassword(false); });
     $("#logoutBtn").addEventListener("click", async () => {
       $$(".toast").forEach(t => t.remove());
-      clearInterval(beatTimer); await window.Store.signOut(); S.user = null; ["logActionRoot", "logViewRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
+      clearInterval(beatTimer); await window.Store.signOut(); S.user = null; ["logActionRoot", "logViewRoot", "pwRoot"].forEach(id => { const r = $(`#${id}`); if (r) r.innerHTML = ""; }); document.body.classList.remove("auth-ready"); $("#profileDropdown").hidden = true; closeDrawer();
     });
     try { S.user = await window.Store.currentUser(); } catch (e) { S.user = null; showLoginError(e.message); }
     if (S.user) await enterApp();
