@@ -290,7 +290,8 @@
       const { error } = await this.client.auth.signInWithOAuth({
         provider: "azure",
         // prompt=login (Remember me off): Microsoft always asks for the password, even if already signed in to M365.
-        // login_hint pre-fills the Turtle23 email typed on our page (tenant is locked by the Azure provider's Tenant URL).
+        // login_hint pre-fills the email typed on our page (tenant is locked to Turtle23 by the Azure provider's Tenant URL);
+        // a partner email (Entra B2B guest, e.g. @btsgroup.co.th) is sent on by Microsoft to that company's own sign-in page.
         options: { scopes: "openid email profile offline_access", redirectTo,
           queryParams: this.remembered().on ? { login_hint: email || "" } : { prompt: "login", login_hint: email || "" } }
       });

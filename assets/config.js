@@ -7,6 +7,9 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "",
   // Users may sign in with a short username; it is turned into <username>@<EMAIL_DOMAIN>.
   EMAIL_DOMAIN: "turtle23.com",
+  // Partner companies whose people sign in as Microsoft Entra guests of Turtle23 (their own company password).
+  // Only emails an Admin has added in Admin Tools > Users & Roles get in.
+  PARTNER_EMAIL_DOMAINS: ["btsgroup.co.th"],
   // Sign-in is through Microsoft 365. Set true only if you also create email/password users in Supabase.
   ALLOW_PASSWORD_LOGIN: false
   // Status emails go through the Supabase Edge Function "send-email"; its keys are Supabase secrets, never here.

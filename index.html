@@ -22,7 +22,7 @@
         <p class="login-intro">Sign in to access the Contract Tracking System<br>Track, Manage and Monitor Contract Progress</p>
         <div class="login-error" id="loginError" role="alert"></div>
         <form class="ms-form" id="msForm" novalidate>
-          <label class="ms-email-label" for="msEmail">อีเมลบริษัท (Turtle23)</label>
+          <label class="ms-email-label" for="msEmail" id="msEmailLabel">อีเมลบริษัท (Turtle23)</label>
           <input class="ms-email" id="msEmail" type="email" placeholder="name@turtle23.com" autocomplete="username" autocapitalize="none" spellcheck="false" required>
           <label class="ms-remember"><input type="checkbox" id="msRemember"> จดจำการเข้าสู่ระบบ (Remember me)</label>
         <button class="ms-button" id="msLogin" type="submit">
@@ -31,6 +31,7 @@
         </button>
         </form>
         <p class="ms-note">ระบบจะพาไปหน้า Microsoft Entra ของ Turtle23 เพื่อใส่รหัสผ่าน สิทธิ์การใช้งานกำหนดโดยผู้ดูแลระบบ</p>
+        <p class="ms-note" id="msNote" hidden></p>
         <div class="login-divider" id="loginDivider"><span>หรือ</span></div>
         <form class="login-form" id="loginForm" novalidate>
           <div class="login-field">

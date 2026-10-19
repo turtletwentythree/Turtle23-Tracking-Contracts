@@ -31,6 +31,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           EMAIL_DOMAIN: ${{ vars.EMAIL_DOMAIN || 'turtle23.com' }}
+          PARTNER_EMAIL_DOMAINS: ${{ vars.PARTNER_EMAIL_DOMAINS || 'btsgroup.co.th' }}
           ALLOW_PASSWORD_LOGIN: ${{ vars.ALLOW_PASSWORD_LOGIN || 'false' }}
         # Values are trimmed (a pasted secret often ends with a newline) and JSON-escaped,
         # so a stray character can never break config.js and drop the site into demo mode.
@@ -41,6 +42,7 @@ jobs:
               SUPABASE_URL: t(process.env.SUPABASE_URL).replace(/\/+$/, ""),
               SUPABASE_ANON_KEY: t(process.env.SUPABASE_ANON_KEY),
               EMAIL_DOMAIN: t(process.env.EMAIL_DOMAIN) || "turtle23.com",
+              PARTNER_EMAIL_DOMAINS: t(process.env.PARTNER_EMAIL_DOMAINS).split(/[\s,;]+/).map(d => d.toLowerCase().replace(/^@/, "")).filter(Boolean),
               ALLOW_PASSWORD_LOGIN: t(process.env.ALLOW_PASSWORD_LOGIN) === "true"
             };
             // Only the public (publishable / anon) key may ship to the browser.

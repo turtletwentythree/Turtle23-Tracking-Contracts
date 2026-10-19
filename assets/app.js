@@ -164,7 +164,16 @@
     route();
   }
 
+  // Partner companies (e.g. BTS Group) sign in as Entra guests of Turtle23: Microsoft sends them to their own company's
+  // sign-in page. Access still needs a row in Admin Tools > Users & Roles (the database refuses anyone else).
+  const loginPartnerDomains = () => (window.APP_CONFIG?.PARTNER_EMAIL_DOMAINS || []).map(d => String(d).toLowerCase().replace(/^@/, "")).filter(Boolean);
   function initLogin() {
+    const partners = loginPartnerDomains();
+    if (partners.length) {
+      $("#msEmailLabel").textContent = "อีเมลบริษัท (Turtle23 / BTS Group)";
+      $("#msNote").textContent = `อีเมล @${partners.join(", @")}: ระบบจะพาไปหน้า Microsoft Entra ของ ${partners.join(", ")} เพื่อใส่รหัสผ่าน`;
+      $("#msNote").hidden = false;
+    }
     const demo = window.Store.mode === "demo";
     const passwordAllowed = demo || Boolean(window.APP_CONFIG?.ALLOW_PASSWORD_LOGIN);
     $("#demoAccountSection").hidden = !demo;
@@ -176,10 +185,11 @@
     $("#msForm").addEventListener("submit", async e => {
       e.preventDefault();
       const domain = (window.APP_CONFIG?.EMAIL_DOMAIN || "turtle23.com").toLowerCase();
+      const domains = [domain, ...loginPartnerDomains()];
       let email = $("#msEmail").value.trim().toLowerCase();
       if (email && !email.includes("@")) email = `${email}@${domain}`;
       if (!/^[^@\s]+@[^@\s]+$/.test(email)) return showLoginError("กรุณากรอกอีเมลบริษัท เช่น name@" + domain);
-      if (!email.endsWith("@" + domain)) return showLoginError(`ใช้ได้เฉพาะอีเมล @${domain} ของ Turtle23 เท่านั้น`);
+      if (!domains.includes(email.split("@")[1])) return showLoginError(`ใช้ได้เฉพาะอีเมล ${domains.map(d => "@" + d).join(" หรือ ")} เท่านั้น`);
       showLoginError("");
       window.Store.setRemember?.($("#msRemember").checked, email);
       const b = $("#msLogin");
