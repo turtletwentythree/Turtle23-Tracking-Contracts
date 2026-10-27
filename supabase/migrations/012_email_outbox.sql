@@ -16,7 +16,7 @@ create table if not exists public.email_outbox (
   subject text not null,
   body text not null,
   attachments jsonb not null default '[]',   -- [{ path, fileName, fileSize, mimeType }] from the attachments bucket
-  delivery text,                             -- attached | links | none
+  delivery text,                             -- attached | partial (some files as a link) | links | none
   status text not null default 'queued' check (status in ('queued', 'sending', 'sent', 'failed')),
   attempts int not null default 0,
   provider text,

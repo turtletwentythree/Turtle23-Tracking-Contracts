@@ -61,6 +61,7 @@ export function graph(env: Env, http: typeof fetch = fetch): Provider {
   return {
     name: "graph",
     maxAttachBytes: 15 * 1024 * 1024,
+    inlineAttachBytes: INLINE_ATTACH_BYTES,
     async send(m: Mail) {
       const sender = graphSender(env);
       const tokenRes = await http(`https://login.microsoftonline.com/${encodeURIComponent(need(env, "MS_TENANT_ID"))}/oauth2/v2.0/token`, {

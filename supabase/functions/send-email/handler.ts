@@ -15,7 +15,18 @@ export interface Mail {
   from: string; to: string; toMore?: string[]; cc: string[]; replyTo?: string; subject: string; text: string; html: string;
   attachments: Attachment[]; idempotencyKey: string;
 }
-export interface Provider { name: string; maxAttachBytes: number; send(mail: Mail): Promise<{ id: string }> }
+// inlineAttachBytes: what still fits when the provider refuses larger files (needsLinks), e.g. Microsoft 365 without Mail.ReadWrite
+export interface Provider { name: string; maxAttachBytes: number; inlineAttachBytes?: number; send(mail: Mail): Promise<{ id: string }> }
+
+// Files that fit under the limit, smallest first, are attached; the rest go as a link to the system. Returns the linked indexes.
+export function pickLinked(sizes: number[], limit: number) {
+  const linked = new Set<number>();
+  let used = 0;
+  sizes.map((n, i) => [n, i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).forEach(([n, i]) => {
+    if (used + n <= limit) used += n; else linked.add(i);
+  });
+  return linked;
+}
 export interface Deps {
   env: Env;
   // user: a client that acts as the caller (their session); admin: service-role client for email_outbox
@@ -166,14 +177,17 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
       files.push({ fileName: a.fileName, mimeType: a.mimeType, content });
       meta.push({ ...a, fileSize: content.length });
     }
-    // 4. Too large for the provider: no files, a link to the contract in the system instead
+    // 4. Too large for the provider: attach the files that fit (smallest first), the others go as a link to the system
     const limit = Math.min(deps.provider.maxAttachBytes, (Number(deps.env("MAX_ATTACH_MB")) || Infinity) * 1024 * 1024);
-    let asLinks = files.length > 0 && total > limit;
+    const sizes = files.map(f => f.content.length);
+    let linked = total > limit ? pickLinked(sizes, limit) : new Set<number>();
     const withLinks = () => {
       let text = m.body;
-      if (!asLinks) return text;
-      text += "\n\nFiles are too large to attach. Open them in the system: / ไฟล์มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:";
-      files.forEach((f, i) => { text += `\n${i + 1}. ${f.fileName}`; });
+      if (!linked.size) return text;
+      text += linked.size === files.length
+        ? "\n\nFiles are too large to attach. Open them in the system: / ไฟล์มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:"
+        : "\n\nThese files are too large to attach. Open them in the system: / ไฟล์ต่อไปนี้มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:";
+      files.filter((_, i) => linked.has(i)).forEach((f, i) => { text += `\n${i + 1}. ${f.fileName}`; });
       if (m.systemLink) text += `\n${m.systemLink}`;
       return text;
     };
@@ -181,19 +195,21 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
     if (!from) throw new HttpError(500, "EMAIL_FROM secret is not set.");
     const mail = () => { const text = withLinks(); return {
       from, to: m.to, toMore: m.toMore, cc: m.cc, replyTo: who.email || undefined, subject: m.subject, text, html: htmlBody(text),
-      attachments: asLinks ? [] : files, idempotencyKey: m.requestId
+      attachments: files.filter((_, i) => !linked.has(i)), idempotencyKey: m.requestId
     }; };
     let sent;
     try { sent = await deps.provider.send(mail()); }
     catch (e) {
       // The provider cannot carry files this large (e.g. Microsoft 365 without Mail.ReadWrite): send with a link to the system instead
-      if (asLinks || !(e as any)?.needsLinks) throw e;
-      asLinks = true;
-      console.warn(JSON.stringify({ event: "email_attach_fallback", requestId: m.requestId, error: (e as Error).message }));
+      if (linked.size === files.length || !(e as any)?.needsLinks) throw e;
+      const before = linked;
+      linked = pickLinked(sizes, Math.min(limit, deps.provider.inlineAttachBytes ?? 0));
+      for (const i of before) linked.add(i);
+      console.warn(JSON.stringify({ event: "email_attach_fallback", requestId: m.requestId, linked: linked.size, of: files.length, error: (e as Error).message }));
       sent = await deps.provider.send(mail());
     }
     const done = {
-      status: "sent", delivery: !files.length ? "none" : asLinks ? "links" : "attached", provider: deps.provider.name,
+      status: "sent", delivery: !files.length ? "none" : !linked.size ? "attached" : linked.size === files.length ? "links" : "partial", provider: deps.provider.name,
       provider_message_id: sent.id || null, attachments: meta, sent_at: now().toISOString(), updated_at: now().toISOString(), error: null
     };
     await db.from("email_outbox").update(done).eq("request_id", m.requestId);
