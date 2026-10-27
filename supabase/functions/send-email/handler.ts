@@ -27,6 +27,17 @@ export function pickLinked(sizes: number[], limit: number) {
   });
   return linked;
 }
+// Files up to the limit in as few emails as possible (largest file first into the first batch it fits), largest batch first.
+// Files in skip (each one over the limit) are left out.
+export function packParts(sizes: number[], limit: number, skip: Set<number>) {
+  const bins: { used: number; idx: number[] }[] = [];
+  sizes.map((n, i) => [n, i]).filter(([, i]) => !skip.has(i)).sort((a, b) => b[0] - a[0] || a[1] - b[1]).forEach(([n, i]) => {
+    const bin = bins.find(b => b.used + n <= limit);
+    if (bin) { bin.used += n; bin.idx.push(i); } else bins.push({ used: n, idx: [i] });
+  });
+  bins.sort((a, b) => b.used - a.used);
+  return bins.length ? bins.map(b => b.idx.sort((x, y) => x - y)) : [[]];
+}
 export interface Deps {
   env: Env;
   // user: a client that acts as the caller (their session); admin: service-role client for email_outbox
@@ -177,40 +188,62 @@ export async function handle(payload: any, authHeader: string, deps: Deps) {
       files.push({ fileName: a.fileName, mimeType: a.mimeType, content });
       meta.push({ ...a, fileSize: content.length });
     }
-    // 4. Too large for the provider: attach the files that fit (smallest first), the others go as a link to the system
+    // 4. Too large for one email: the files are split over several emails, each up to the provider's limit, largest
+    //    batch first; part 1 carries the full message. Only a single file above the limit goes as a link to the system.
+    //    If the provider refuses large files (Microsoft 365 without Mail.ReadWrite), it is one email again: the files
+    //    that fit are attached (smallest first) and the rest go as a link.
     const limit = Math.min(deps.provider.maxAttachBytes, (Number(deps.env("MAX_ATTACH_MB")) || Infinity) * 1024 * 1024);
     const sizes = files.map(f => f.content.length);
-    let linked = total > limit ? pickLinked(sizes, limit) : new Set<number>();
-    const withLinks = () => {
-      let text = m.body;
-      if (!linked.size) return text;
-      text += linked.size === files.length
+    let linked = new Set<number>(sizes.flatMap((n, i) => n > limit ? [i] : []));
+    let parts = total > limit ? packParts(sizes, limit, linked) : [sizes.map((_, i) => i).filter(i => !linked.has(i))];
+    const from = deps.env("EMAIL_FROM") || "";
+    if (!from) throw new HttpError(500, "EMAIL_FROM secret is not set.");
+    const linkText = () => {
+      if (!linked.size) return "";
+      let text = linked.size === files.length
         ? "\n\nFiles are too large to attach. Open them in the system: / ไฟล์มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:"
         : "\n\nThese files are too large to attach. Open them in the system: / ไฟล์ต่อไปนี้มีขนาดใหญ่เกินกว่าจะแนบในอีเมล กรุณาเปิดในระบบ:";
       files.filter((_, i) => linked.has(i)).forEach((f, i) => { text += `\n${i + 1}. ${f.fileName}`; });
       if (m.systemLink) text += `\n${m.systemLink}`;
       return text;
     };
-    const from = deps.env("EMAIL_FROM") || "";
-    if (!from) throw new HttpError(500, "EMAIL_FROM secret is not set.");
-    const mail = () => { const text = withLinks(); return {
-      from, to: m.to, toMore: m.toMore, cc: m.cc, replyTo: who.email || undefined, subject: m.subject, text, html: htmlBody(text),
-      attachments: files.filter((_, i) => !linked.has(i)), idempotencyKey: m.requestId
-    }; };
-    let sent;
-    try { sent = await deps.provider.send(mail()); }
-    catch (e) {
-      // The provider cannot carry files this large (e.g. Microsoft 365 without Mail.ReadWrite): send with a link to the system instead
-      if (linked.size === files.length || !(e as any)?.needsLinks) throw e;
-      const before = linked;
-      linked = pickLinked(sizes, Math.min(limit, deps.provider.inlineAttachBytes ?? 0));
-      for (const i of before) linked.add(i);
-      console.warn(JSON.stringify({ event: "email_attach_fallback", requestId: m.requestId, linked: linked.size, of: files.length, error: (e as Error).message }));
-      sent = await deps.provider.send(mail());
+    const mail = (k: number) => {
+      const n = parts.length, mine = parts[k].map(i => files[i]);
+      let text: string;
+      if (n === 1) text = m.body + linkText();
+      else if (k === 0) text = m.body + `\n\nThe attachments are sent in ${n} emails because of their size. This is email 1 of ${n}. / ไฟล์แนบมีขนาดใหญ่ จึงแบ่งส่งเป็น ${n} ฉบับ นี่คือฉบับที่ 1/${n}` + linkText();
+      else text = `Attachments ${k + 1} of ${n} for: ${m.subject}\nThe details are in email 1 of ${n}. / ไฟล์แนบฉบับที่ ${k + 1}/${n} ของ: ${m.subject}\nรายละเอียดอยู่ในฉบับที่ 1/${n}\n\n`
+        + mine.map((f, i) => `${i + 1}. ${f.fileName}`).join("\n") + (m.systemLink ? `\n\n${m.systemLink}` : "");
+      return { from, to: m.to, toMore: m.toMore, cc: m.cc, replyTo: who.email || undefined,
+        subject: n === 1 ? m.subject : `${m.subject} (${k + 1}/${n})`, text, html: htmlBody(text),
+        attachments: mine, idempotencyKey: n === 1 ? m.requestId : `${m.requestId}-p${k + 1}of${n}` };
+    };
+    // A Retry after a failure part-way skips the parts already sent (kept in provider_message_id as "parts k/n: id|id")
+    const prior = String(row.provider_message_id || "").match(/^parts (\d+)\/(\d+): (.*)$/);
+    const ids: string[] = prior && Number(prior[2]) === parts.length ? prior[3].split("|") : [];
+    const progress = () => parts.length > 1 ? `parts ${ids.length}/${parts.length}: ${ids.join("|")}` : ids[0] || null;
+    try {
+      for (let k = ids.length; k < parts.length; k++) {
+        try { ids.push((await deps.provider.send(mail(k))).id || ""); }
+        catch (e) {
+          // Large files refused before anything went out: one email, the files that fit, the rest as a link
+          if (ids.length || !(e as any)?.needsLinks || linked.size === files.length) throw e;
+          linked = pickLinked(sizes, Math.min(limit, deps.provider.inlineAttachBytes ?? 0));
+          parts = [sizes.map((_, i) => i).filter(i => !linked.has(i))];
+          console.warn(JSON.stringify({ event: "email_attach_fallback", requestId: m.requestId, linked: linked.size, of: files.length, error: (e as Error).message }));
+          ids.push((await deps.provider.send(mail(0))).id || "");
+          break;
+        }
+      }
+    } catch (e) {
+      if (ids.length) await db.from("email_outbox").update({ provider_message_id: progress() }).eq("request_id", m.requestId);
+      throw e;
     }
+    const delivery = !files.length ? "none" : linked.size === files.length ? "links" : parts.length > 1 ? (linked.size ? "split+links" : "split")
+      : linked.size ? "partial" : "attached";
     const done = {
-      status: "sent", delivery: !files.length ? "none" : !linked.size ? "attached" : linked.size === files.length ? "links" : "partial", provider: deps.provider.name,
-      provider_message_id: sent.id || null, attachments: meta, sent_at: now().toISOString(), updated_at: now().toISOString(), error: null
+      status: "sent", delivery, provider: deps.provider.name,
+      provider_message_id: progress(), attachments: meta, sent_at: now().toISOString(), updated_at: now().toISOString(), error: null
     };
     await db.from("email_outbox").update(done).eq("request_id", m.requestId);
     console.log(JSON.stringify({ event: "email_sent", requestId: m.requestId, contractId: m.contractId, by: who.email, to: m.to, cc: m.cc.length, files: files.length, delivery: done.delivery }));
